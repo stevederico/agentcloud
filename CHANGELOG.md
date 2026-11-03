@@ -1,3 +1,7 @@
+0.29.1
+
+  Pin base images by digest
+
 0.29.0
 
   Fix SQLCipher image build

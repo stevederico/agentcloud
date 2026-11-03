@@ -1,7 +1,11 @@
 # Zero-crate Rust binary. Links SQLCipher 4.18, built from the official tag.
 # Bookworm's packages stop at 4.6.1.
 
-FROM rust:1-slim-bookworm AS builder
+# Base images are pinned by multi-arch index digest (tag kept for
+# readability). Each digest was first published at least 7 days before
+# it was pinned (2026-11-03).
+# rust:1.99.0-slim-bookworm, pushed 2026-10-06 (1.99.1-slim-bookworm moved on 2026-10-28, < 7 days)
+FROM rust:1.99.0-slim-bookworm@sha256:2c3a22f0a5533ea2dd5a16627bc841228151faa2d4de2644ac9987e4a2f1f2fa AS builder
 WORKDIR /build
 
 RUN apt-get update \
@@ -31,7 +35,8 @@ COPY public ./public
 
 RUN cargo build --release
 
-FROM debian:bookworm-slim
+# debian:bookworm-20261020-slim, pushed 2026-10-21
+FROM debian:bookworm-20261020-slim@sha256:7ff6ba31527b9e336162fa061746c366c4b2032f4d2cff2078bea43f78efe3f8
 WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends libssl3 \
