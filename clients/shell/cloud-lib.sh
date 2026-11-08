@@ -12,13 +12,13 @@
 # directory that is removed on exit. ("almanac-auth-v1" is the wire format and
 # must not be renamed.)
 #
-# Env (first set wins): CLOUD_CONFIG, AGENTCLOUD_CONFIG, CLOUD_CONFIG
-# (credentials file); AGENTCLOUD_BASE, CLOUD_BASE; CLOUD_UA, AGENTCLOUD_UA,
-# CLOUD_UA; AGENTCLOUD_BIN, ALMANAC_BIN. The ALMANAC_* names are read only
+# Env (first set wins): CLOUD_CONFIG, AGENTCLOUD_CONFIG, ALMANAC_CONFIG
+# (credentials file); CLOUD_BASE, AGENTCLOUD_BASE, ALMANAC_BASE; CLOUD_UA,
+# AGENTCLOUD_UA, ALMANAC_UA; AGENTCLOUD_BIN, ALMANAC_BIN. The ALMANAC_* names are read only
 # for installs from before the rename.
 
 _cloud_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
-CLOUD_CONFIG="${CLOUD_CONFIG:-${AGENTCLOUD_CONFIG:-${CLOUD_CONFIG-}}}"
+CLOUD_CONFIG="${CLOUD_CONFIG:-${AGENTCLOUD_CONFIG:-${ALMANAC_CONFIG-}}}"
 if [[ -z $CLOUD_CONFIG ]]; then
   CLOUD_CONFIG="$_cloud_cfg/agentcloud/hosted-calendars.json"
   # Installs from before the rename keep their credentials in ~/.config/almanac.
@@ -29,9 +29,9 @@ fi
 unset _cloud_cfg
 # Set when the caller chose a server; otherwise the credentials' write URL
 # decides, with the old almanac.dottie.ai host moved to the Agent Cloud host.
-CLOUD_BASE_SET="${AGENTCLOUD_BASE:+1}${CLOUD_BASE:+1}"
-CLOUD_BASE="${AGENTCLOUD_BASE:-${CLOUD_BASE:-https://cloud.bixbyapps.com}}"
-CLOUD_UA="${CLOUD_UA:-${AGENTCLOUD_UA:-${CLOUD_UA:-Mozilla/5.0 agentcloud-omarchy}}}"
+CLOUD_BASE_SET="${CLOUD_BASE:+1}${AGENTCLOUD_BASE:+1}${ALMANAC_BASE:+1}"
+CLOUD_BASE="${CLOUD_BASE:-${AGENTCLOUD_BASE:-${ALMANAC_BASE:-https://cloud.bixbyapps.com}}}"
+CLOUD_UA="${CLOUD_UA:-${AGENTCLOUD_UA:-${ALMANAC_UA:-Mozilla/5.0 agentcloud-omarchy}}}"
 CLOUD_TMPDIR=""
 
 # A new temp file in this run's private directory (made by cloud_load).

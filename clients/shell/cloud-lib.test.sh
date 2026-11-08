@@ -56,6 +56,11 @@ check "falls back to ~/.config/almanac, old host to cloud" "$got" "$home/almanac
 mkdir -p "$home/agentcloud"; cp "$home/almanac/hosted-calendars.json" "$home/agentcloud/"
 got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" bash -c '. "$1"; echo "$CLOUD_CONFIG"' _ "$here/cloud-lib.sh")
 check "prefers ~/.config/agentcloud" "$got" "$home/agentcloud/hosted-calendars.json"
+# Old ALMANAC_* env names still work for installs from before the rename.
+got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" ALMANAC_CONFIG="$home/almanac/hosted-calendars.json" ALMANAC_BASE=http://old:2 ALMANAC_UA=old-ua bash -c '. "$1"; cloud_load; echo "$CLOUD_CONFIG $CLOUD_ROOT $CLOUD_UA"' _ "$here/cloud-lib.sh")
+check "ALMANAC_* env fallbacks" "$got" "$home/almanac/hosted-calendars.json http://old:2/v1/c/cal_x old-ua"
+got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" CLOUD_BASE=http://preset:3 AGENTCLOUD_BASE=http://h:1 bash -c '. "$1"; cloud_load; echo "$CLOUD_ROOT"' _ "$here/cloud-lib.sh")
+check "caller-preset CLOUD_BASE wins" "$got" "http://preset:3/v1/c/cal_x"
 got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" AGENTCLOUD_BASE=http://h:1 bash -c '. "$1"; cloud_load; echo "$CLOUD_ROOT"' _ "$here/cloud-lib.sh")
 check "AGENTCLOUD_BASE wins" "$got" "http://h:1/v1/c/cal_x"
 rm -rf "$home"

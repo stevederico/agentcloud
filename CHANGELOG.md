@@ -1,3 +1,8 @@
+0.42.0
+
+  Restore ALMANAC_* env fallbacks
+  Test old env names
+
 0.41.0
 
   Rename shared client files
