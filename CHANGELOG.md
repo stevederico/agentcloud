@@ -1,3 +1,12 @@
+0.35.0
+
+  Lock If-Match writes
+  Resync cursors past rev
+  Query changes by rev
+  Rotate guards re-seals
+  Fail empty shell seals
+  Advance cursor after handler
+
 0.34.0
 
   Add shared web client

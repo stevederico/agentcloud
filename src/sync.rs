@@ -164,20 +164,53 @@ impl Db {
     /// `since` 0 is a full snapshot (rows from before 0.31.0 have rev 0).
     pub fn changes(&self, calendar_id: &str, since: i64) -> Result<Changes, ChangesError> {
         let (rev, purged) = self.calendar_revs(calendar_id)?;
-        if since > 0 && since < purged {
+        // A cursor past the counter comes from before a restore from backup:
+        // the revs after the backup are being handed out again, so a delta
+        // would skip them. Make the client start over.
+        if since > 0 && (since < purged || since > rev) {
             return Err(ChangesError::Expired);
         }
-        let mut events = self.list_events(calendar_id)?;
-        events.retain(|e| since == 0 || e.rev > since);
-        let mut todos = self.list_todos(calendar_id, None)?;
-        todos.retain(|t| since == 0 || t.rev > since);
-        let notes = self
-            .list_notes(calendar_id, None, 0)?
-            .into_iter()
-            .filter(|n| since == 0 || n.rev > since)
-            .collect();
+        if since == 0 {
+            return Ok(Changes {
+                rev,
+                events: self.list_events(calendar_id)?,
+                todos: self.list_todos(calendar_id, None)?,
+                notes: self.list_notes(calendar_id, None, 0)?,
+                deleted: Vec::new(),
+            });
+        }
+        // Only the rows after the cursor, through the (calendar_id, rev) index.
+        let binds = [Bind::Text(calendar_id), Bind::I64(since)];
+        let uids = self.conn.query(
+            "SELECT uid FROM events WHERE calendar_id = ?1 AND rev > ?2 ORDER BY rev",
+            &binds,
+            |row| row.text(0),
+        )?;
+        let mut events = Vec::with_capacity(uids.len());
+        for uid in uids {
+            // get_event attaches the exdates and overrides.
+            if let Some(event) = self.get_event(calendar_id, &uid)? {
+                events.push(event);
+            }
+        }
+        let todos = self.conn.query(
+            &format!(
+                "SELECT {} FROM todos WHERE calendar_id = ?1 AND rev > ?2 ORDER BY rev",
+                crate::todos::TODO_COLS
+            ),
+            &binds,
+            crate::todos::row_todo,
+        )?;
+        let notes = self.conn.query(
+            &format!(
+                "SELECT {} FROM notes WHERE calendar_id = ?1 AND rev > ?2 ORDER BY rev",
+                crate::notes::NOTE_COLS
+            ),
+            &binds,
+            crate::notes::row_note,
+        )?;
         let mut deleted = Vec::new();
-        if since > 0 {
+        {
             for (table, kind) in KINDS {
                 let rows = self.conn.query(
                     &format!(

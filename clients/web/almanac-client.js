@@ -345,8 +345,10 @@ export function createSync(client, { onChange, onError, intervalMs = 60000, curs
           !result.todos.length &&
           !result.notes.length &&
           !result.deleted.length
-        cursor = result.rev
+        // Move the cursor only after the handler took the batch, so a
+        // handler that throws sees the same changes again next time.
         if (!empty && onChange) await onChange(result)
+        cursor = result.rev
       } while (again)
     } catch (e) {
       if (onError) onError(e)

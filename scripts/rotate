@@ -53,9 +53,9 @@ def almanac_bin():
     fail("needs the almanac binary")
 
 
-def request(base, token, method, path, payload=None, ok=(200, 201, 204)):
+def request(base, token, method, path, payload=None, ok=(200, 201, 204), extra=None):
     data = None if payload is None else json.dumps(payload).encode()
-    headers = {"Authorization": f"Bearer {token}", "User-Agent": "almanac-rotate/1"}
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": "almanac-rotate/1", **(extra or {})}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(f"{base}{path}", data=data, headers=headers, method=method)
@@ -84,6 +84,47 @@ def run(binary, args, stdin, creds):
     if proc.returncode != 0:
         fail(f"almanac {args[0]} failed")
     return proc.stdout
+
+
+def try_open(binary, cal_id, kind, uid, wire, creds):
+    """The plaintext, or None when this key cannot open the seal."""
+    env = dict(os.environ, ALMANAC_CREDS=str(creds))
+    proc = subprocess.run(
+        [binary, "open", "--cal", cal_id, "--kind", kind, "--uid", uid],
+        input=wire.encode(), capture_output=True, env=env,
+    )
+    return proc.stdout if proc.returncode == 0 else None
+
+
+def reseal_pass(base, token, info, binary, cal_id, creds, new_creds, since):
+    """Re-seal every item changed after `since` that only the old key opens.
+
+    Each PUT carries If-Match, so an edit another device makes meanwhile is
+    never overwritten: a 412 leaves it for the next pass. Returns
+    (cursor, resealed, retry).
+    """
+    _, changes = request(base, token, "GET", f"{info}/changes?since={since}")
+    resealed, retry = 0, False
+    for kind, path in PATHS.items():
+        for item in changes.get(path, []):
+            wire = item.get("seal")
+            if not wire:
+                continue
+            uid = item["uid"]
+            plain = try_open(binary, cal_id, kind, uid, wire, creds)
+            if plain is None:
+                if try_open(binary, cal_id, kind, uid, wire, new_creds) is None:
+                    fail(f"neither key opens {kind} {uid}")
+                continue  # already on the new key (an earlier run, or a pass ago)
+            sealed = run(binary, ["seal", "--cal", cal_id, "--kind", kind, "--uid", uid],
+                         plain, new_creds).decode().strip()
+            code, _ = request(base, token, "PUT", f"{info}/{path}/{uid}", {"seal": sealed},
+                              ok=(200, 201, 412), extra={"If-Match": f'"{item["rev"]}"'})
+            if code == 412:
+                retry = True
+            else:
+                resealed += 1
+    return changes["rev"], resealed, retry
 
 
 def write_creds(path, rows):
@@ -151,21 +192,28 @@ def main():
         request(base, old_token, "POST", f"{info}/rotate",
                 {"auth_hash": hashlib.sha256(new_token.encode()).hexdigest()})
 
-        _, changes = request(base, new_token, "GET", f"{info}/changes")
-        resealed = 0
-        for kind, path in PATHS.items():
-            for item in changes.get(path, []):
-                if not item.get("seal"):
-                    continue
-                uid = item["uid"]
-                plain = run(binary, ["open", "--cal", cal_id, "--kind", kind, "--uid", uid],
-                            item["seal"].encode(), creds)
-                wire = run(binary, ["seal", "--cal", cal_id, "--kind", kind, "--uid", uid],
-                           plain, new_creds).decode().strip()
-                request(base, new_token, "PUT", f"{info}/{path}/{uid}", {"seal": wire})
-                resealed += 1
+        # Passes until one finds nothing left on the old key. Each pass reads
+        # only what changed since the last, so it ends once other devices
+        # go quiet.
+        cursor, resealed = 0, 0
+        for _ in range(20):
+            cursor, done, retry = reseal_pass(base, new_token, info, binary, cal_id,
+                                              creds, new_creds, cursor)
+            resealed += done
+            if not done and not retry:
+                break
+        else:
+            fail("the calendar kept changing; run rotate again (the rotation is still open)")
 
         _, view = request(base, new_token, "POST", f"{info}/rotate/commit", {"feeds": feeds})
+        # A device still on the old key could write between the last pass and
+        # the commit. The old token is refused now, so one more pass closes it.
+        for _ in range(20):
+            cursor, done, retry = reseal_pass(base, new_token, info, binary, cal_id,
+                                              creds, new_creds, cursor)
+            resealed += done
+            if not retry:
+                break
     finish(creds, rows, single, entry, old_key, new_key, view)
     print(f"rotated {cal_id}: {resealed} sealed items re-sealed"
           + ("; new subscribe URLs are in the credentials file" if feeds else ""))

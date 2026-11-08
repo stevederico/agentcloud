@@ -221,3 +221,60 @@ fn purging_old_trash_expires_older_cursors() {
     let (status, _) = call(&app, &cal.key, "GET", &format!("{base}/changes"), None);
     assert_eq!(status, 200, "a full sync always works");
 }
+
+#[test]
+fn a_cursor_past_the_counter_is_410() {
+    // A client that synced before a restore from backup holds a rev the
+    // server has not reached again. A delta would skip the reused revs.
+    let app = app();
+    let cal = create(&app);
+    put_note(&app, &cal, "n1", "One", None);
+    let (_, all) = call(&app, &cal.key, "GET", &format!("/v1/c/{}/changes", cal.id), None);
+    let ahead = rev_of(&all) + 5;
+    let (status, _) = call(&app, &cal.key, "GET", &format!("/v1/c/{}/changes?since={ahead}", cal.id), None);
+    assert_eq!(status, 410);
+}
+
+#[test]
+fn a_delta_carries_changed_events_and_todos() {
+    let app = app();
+    let cal = create(&app);
+    let base = format!("/v1/c/{}", cal.id);
+    let event = r#"{"summary":"Old","start":"2026-11-10T10:00:00Z","end":"2026-11-10T11:00:00Z"}"#;
+    assert!(matches!(call(&app, &cal.key, "PUT", &format!("{base}/events/e1"), Some(event)).0, 200 | 201));
+    call(&app, &cal.key, "PUT", &format!("{base}/events/e2"), Some(event));
+    call(&app, &cal.key, "PUT", &format!("{base}/todos/t1"), Some(r#"{"title":"A"}"#));
+    let (_, all) = call(&app, &cal.key, "GET", &format!("{base}/changes"), None);
+    let cursor = rev_of(&all);
+
+    let moved = r#"{"summary":"New","start":"2026-11-10T12:00:00Z","end":"2026-11-10T13:00:00Z"}"#;
+    call(&app, &cal.key, "PUT", &format!("{base}/events/e1"), Some(moved));
+    call(&app, &cal.key, "PUT", &format!("{base}/todos/t1"), Some(r#"{"title":"B"}"#));
+    let (status, delta) = call(&app, &cal.key, "GET", &format!("{base}/changes?since={cursor}"), None);
+    assert_eq!(status, 200);
+    assert_eq!(uids(&delta, "events"), vec!["e1"]);
+    assert_eq!(uids(&delta, "todos"), vec!["t1"]);
+    assert!(uids(&delta, "notes").is_empty());
+}
+
+#[test]
+fn racing_writers_with_the_same_rev_cannot_both_win() {
+    let app = app();
+    let cal = create(&app);
+    put_note(&app, &cal, "n1", "One", None);
+    for _ in 0..20 {
+        let (_, now) = call(&app, &cal.key, "GET", &format!("/v1/c/{}/notes/n1", cal.id), None);
+        let rev = format!("\"{}\"", rev_of(&now));
+        let codes: Vec<u16> = std::thread::scope(|s| {
+            let handles: Vec<_> = (0..6)
+                .map(|i| {
+                    let (app, cal, rev) = (&app, &cal, &rev);
+                    s.spawn(move || put_note(app, cal, "n1", &format!("W{i}"), Some(rev)).0)
+                })
+                .collect();
+            handles.into_iter().map(|h| h.join().unwrap()).collect()
+        });
+        assert_eq!(codes.iter().filter(|c| **c == 200).count(), 1, "codes: {codes:?}");
+        assert_eq!(codes.iter().filter(|c| **c == 412).count(), 5, "codes: {codes:?}");
+    }
+}

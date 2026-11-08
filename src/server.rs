@@ -25,6 +25,9 @@ pub struct AppState {
     pub public_base: String,
     pub limits: Limits,
     pub limiter: Arc<Limiter>,
+    /// Held across an item write, from the `If-Match` check to the write, so
+    /// two writers that read the same rev cannot both pass. Taken before `db`.
+    pub item_writes: Arc<Mutex<()>>,
 }
 
 impl AppState {
@@ -34,6 +37,7 @@ impl AppState {
             public_base,
             limits: Limits::default(),
             limiter: Arc::new(Limiter::default()),
+            item_writes: Arc::new(Mutex::new(())),
         }
     }
 }
@@ -454,6 +458,13 @@ fn scoped(state: &AppState, req: &Request, method: &str, rest: &str) -> Response
     if rest == "trash" {
         return trash(state, req, id, method);
     }
+    // Every item write holds this until the handler returns, so an `If-Match`
+    // check and the write it guards see the same rev.
+    let is_item = ["events", "todos", "notes"]
+        .iter()
+        .any(|k| rest == *k || rest.starts_with(&format!("{k}/")));
+    let _write = (is_item && method != "GET")
+        .then(|| state.item_writes.lock().unwrap_or_else(|e| e.into_inner()));
     if let Some((kind, uid, tail)) = item_path(rest) {
         if tail == "restore" {
             return restore(state, req, id, method, kind, uid);

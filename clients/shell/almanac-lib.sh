@@ -195,8 +195,12 @@ d = json.load(open(sys.argv[1]))
 for k in ("uid", "seal", "rev", "sequence", "createdAt", "updatedAt", "sealed", "unreadable"):
     d.pop(k, None)
 json.dump(d, open(sys.argv[2], "w"))' "$plain" "$clean" || return 1
-  ALMANAC_CREDS="$ALMANAC_CONFIG" "$bin" seal --cal "$ALMANAC_ID" --kind "$kind" --uid "$uid" <"$clean" |
-    python3 -c 'import json,sys; json.dump({"seal": sys.stdin.read().strip()}, open(sys.argv[1], "w"))' "$out"
+  local wire
+  # Not a pipe: a failed seal must fail here, not write {"seal": ""}.
+  wire=$(ALMANAC_CREDS="$ALMANAC_CONFIG" "$bin" seal --cal "$ALMANAC_ID" --kind "$kind" --uid "$uid" <"$clean") || return 1
+  [[ $wire == alm1.* ]] || return 1
+  printf '%s' "$wire" |
+    python3 -c 'import json,sys; json.dump({"seal": sys.stdin.read().strip()}, open(sys.argv[1], "w"))' "$out" || return 1
   [[ -s $out ]]
 }
 
