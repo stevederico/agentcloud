@@ -1,3 +1,7 @@
+0.40.0
+
+  Find agentcloud in old checkout
+
 0.39.0
 
   Test the agentcloud binary

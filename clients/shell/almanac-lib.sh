@@ -145,6 +145,7 @@ almanac_bin() {
   for b in "${AGENTCLOUD_BIN-}" "${ALMANAC_BIN-}" \
     "$(command -v agentcloud 2>/dev/null)" "$(command -v almanac 2>/dev/null)" \
     "$HOME/Projects/agentcloud/target/release/agentcloud" "$HOME/Projects/agentcloud/target/debug/agentcloud" \
+    "$HOME/Projects/almanac/target/release/agentcloud" "$HOME/Projects/almanac/target/debug/agentcloud" \
     "$HOME/Projects/almanac/target/release/almanac" "$HOME/Projects/almanac/target/debug/almanac"; do
     if [[ -n $b ]] && _almanac_supports_seal "$b"; then
       printf '%s\n' "$b"
