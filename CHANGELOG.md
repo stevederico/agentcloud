@@ -1,3 +1,10 @@
+0.41.0
+
+  Rename shared client files
+  Rename AlmanacError to CloudError
+  Rename shell almanac_ to cloud_
+  Agent Cloud error text
+
 0.40.0
 
   Find agentcloud in old checkout

@@ -420,10 +420,10 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     write_creds(&key);
     let down = Command::new("python3")
         .arg(&script)
-        .env("ALMANAC_BIN", env!("CARGO_BIN_EXE_agentcloud"))
-        .env("ALMANAC_BASE", "http://127.0.0.1:1")
-        .env("ALMANAC_CREDS", &creds)
-        .env("ALMANAC_BACKUP_DIR", &dest)
+        .env("AGENTCLOUD_BIN", env!("CARGO_BIN_EXE_agentcloud"))
+        .env("AGENTCLOUD_BASE", "http://127.0.0.1:1")
+        .env("AGENTCLOUD_CREDS", &creds)
+        .env("AGENTCLOUD_BACKUP_DIR", &dest)
         .output()
         .unwrap();
     assert!(!down.status.success());

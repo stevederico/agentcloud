@@ -1,4 +1,4 @@
-// node --test clients/web/  (needs target/debug/almanac: cargo build)
+// node --test clients/web/  (needs target/debug/agentcloud: cargo build)
 import { test, before, after } from "node:test"
 import assert from "node:assert/strict"
 import { spawn, execFileSync } from "node:child_process"
@@ -20,18 +20,18 @@ import {
   signIn,
   createClient,
   createSync,
-  AlmanacError,
-} from "./almanac-client.js"
+  CloudError,
+} from "./cloud-client.js"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
 const BIN = process.env.AGENTCLOUD_BIN || process.env.ALMANAC_BIN || join(root, "target", "debug", "agentcloud")
-const UA = { "User-Agent": "almanac-client-test" }
+const UA = { "User-Agent": "agentcloud-client-test" }
 let server
 let base
 let dir
 
 before(async () => {
-  dir = mkdtempSync(join(tmpdir(), "almanac-client-"))
+  dir = mkdtempSync(join(tmpdir(), "agentcloud-client-"))
   const port = 30000 + Math.floor(Math.random() * 20000)
   base = `http://127.0.0.1:${port}`
   server = spawn(BIN, [], {
@@ -81,11 +81,11 @@ test("the auth token matches the server's derivation", async () => {
   assert.equal(await authToken("abc"), want)
 })
 
-test("seals interoperate with the almanac binary", async () => {
+test("seals interoperate with the agentcloud binary", async () => {
   const key = newKey()
   const creds = join(dir, "creds.json")
   writeFileSync(creds, JSON.stringify([{ id: "cal_x", key }]), { mode: 0o600 })
-  const env = { ...process.env, ALMANAC_CREDS: creds }
+  const env = { ...process.env, AGENTCLOUD_CREDS: creds }
   const wire = await sealWith(await sealKey(key), "cal_x", "note", "n1", '{"title":"hi"}')
   const opened = execFileSync(BIN, ["open", "--kind", "note", "--uid", "n1"], { input: wire, env }).toString()
   assert.equal(opened.trim(), '{"title":"hi"}')
@@ -129,7 +129,7 @@ test("changes, conflicts, delete and restore", async () => {
   const a = await client.put("todo", "milk", { title: "Milk" })
   const b = await client.put("todo", "milk", { title: "Oat milk" })
   await assert.rejects(client.put("todo", "milk", { title: "Mine" }, { rev: a.rev }), (e) => {
-    assert.ok(e instanceof AlmanacError)
+    assert.ok(e instanceof CloudError)
     assert.equal(e.conflict, true)
     assert.equal(e.data.current.title, "Oat milk")
     return true
@@ -162,7 +162,7 @@ test("sync reports a full load first, then only changes", async () => {
 })
 
 test("unsent seals from before a key rotation open with the kept previous key", async () => {
-  const store = sessionStore("almanac-test")
+  const store = sessionStore("agentcloud-test")
   const old = { id: "cal_r", feed: "seal", sealKey: await sealKey(newKey()) }
   const now = { id: "cal_r", feed: "seal", sealKey: await sealKey(newKey()) }
   const rows = [

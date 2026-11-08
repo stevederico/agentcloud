@@ -32,7 +32,7 @@ Store `id` and `key`. The key is the write secret. It is shown once and cannot b
 Send the auth token, not the key: `TOKEN = sha256hex(KEY + "almanac-auth-v1")`.
 
 ```bash
-TOKEN=$(printf '%s' "${KEY}almanac-auth-v1" | sha256sum | cut -d' ' -f1)   # or: almanac auth-token
+TOKEN=$(printf '%s' "${KEY}almanac-auth-v1" | sha256sum | cut -d' ' -f1)   # or: agentcloud auth-token
 ```
 
 The token logs in but cannot open a seal (the seal key is `sha256(KEY + "almanac-seal-v1")`), so a client that only sends the token keeps every seal away from the server. Below, `$KEY` in `Authorization` means this token.

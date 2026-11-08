@@ -1,12 +1,13 @@
-// Almanac client for browsers (and Node 20+). One ES module, no dependencies.
-// Copied into each Dottie web app; this file in the almanac repo is the source.
+// Agent Cloud client for browsers (and Node 20+). One ES module, no dependencies.
+// Copied into each web app (Calendar, Todos, Notes); this file in the agentcloud repo is the source.
+// The "almanac-*-v1" domains below are the wire format and must never be renamed.
 //
 // The write key never leaves the device and is never stored:
 //   auth token = hex SHA-256(key + "almanac-auth-v1")   sent as the bearer
 //   seal key   = SHA-256(key + "almanac-seal-v1")        AES-256-GCM, non-extractable
 // The server only ever sees the token, which cannot open a seal.
 //
-// Seal wire format (matches almanac src/seal.rs):
+// Seal wire format (matches agentcloud src/seal.rs):
 //   "alm1." + base64url(nonce(12) || ciphertext || tag(16)), AAD = id \0 kind \0 uid
 
 export const AUTH_DOMAIN = "almanac-auth-v1"
@@ -131,7 +132,7 @@ export async function openKept(store, session, kind, rows) {
   return out
 }
 
-export class AlmanacError extends Error {
+export class CloudError extends Error {
   constructor(message, status, data) {
     super(message)
     this.status = status
@@ -144,12 +145,12 @@ export class AlmanacError extends Error {
 }
 
 export function messageFor(error) {
-  if (!error) return "Almanac request failed"
+  if (!error) return "Agent Cloud request failed"
   if (error.status === 401) return "That key does not open this calendar."
   if (error.status === 412) return "Changed on another device. Showing the latest."
   if (error.status === 429) return "Too many writes. Wait a moment."
   if (error.status === 0) return "Offline. Changes are kept on this device."
-  return error.message ? String(error.message) : "Almanac request failed"
+  return error.message ? String(error.message) : "Agent Cloud request failed"
 }
 
 async function call(base, bearer, path, { method = "GET", body, ifMatch, fetchImpl } = {}) {
@@ -165,7 +166,7 @@ async function call(base, bearer, path, { method = "GET", body, ifMatch, fetchIm
       cache: "no-store",
     })
   } catch (e) {
-    throw new AlmanacError("offline", 0, null)
+    throw new CloudError("offline", 0, null)
   }
   const text = await res.text()
   let data = null
@@ -177,7 +178,7 @@ async function call(base, bearer, path, { method = "GET", body, ifMatch, fetchIm
     }
   }
   if (!res.ok) {
-    throw new AlmanacError(data && data.error ? String(data.error) : `Almanac ${res.status}`, res.status, data)
+    throw new CloudError(data && data.error ? String(data.error) : `Agent Cloud ${res.status}`, res.status, data)
   }
   return data
 }
@@ -190,7 +191,7 @@ async function call(base, bearer, path, { method = "GET", body, ifMatch, fetchIm
 export async function signIn({ id, key, base = "", fetchImpl } = {}) {
   id = String(id || "").trim()
   key = String(key || "").trim()
-  if (!id || !key) throw new AlmanacError("Paste the calendar id and key.", 400, null)
+  if (!id || !key) throw new CloudError("Paste the calendar id and key.", 400, null)
   const token = await authToken(key)
   const path = `/v1/c/${encodeURIComponent(id)}`
   let info
@@ -203,7 +204,7 @@ export async function signIn({ id, key, base = "", fetchImpl } = {}) {
   }
   return {
     id: info.id || id,
-    name: info.name || "Almanac",
+    name: info.name || "Agent Cloud",
     feed: info.feed || "plain",
     token,
     sealKey: await sealKey(key),
@@ -265,7 +266,7 @@ export function createClient(session, { base = "", fetchImpl } = {}) {
     },
     /**
      * Create or replace one item. `rev` (from the item you edited) makes the
-     * write conditional: a 412 AlmanacError carries `data.current` (opened).
+     * write conditional: a 412 CloudError carries `data.current` (opened).
      * On a sealed calendar the fields are sealed here; on a plain one PUT keeps
      * fields you leave out, so it doubles as a patch (Cloudflare blocks PATCH).
      */
@@ -286,7 +287,7 @@ export function createClient(session, { base = "", fetchImpl } = {}) {
       if (session.feed !== "seal") return client.put(kind, uid, changes, { rev })
       const current = await client.get(kind, uid)
       if (rev !== undefined && rev !== null && current.rev !== rev) {
-        throw new AlmanacError("changed elsewhere", 412, { deleted: false, current })
+        throw new CloudError("changed elsewhere", 412, { deleted: false, current })
       }
       const merged = { ...plainFields(current), ...changes }
       for (const [k, v] of Object.entries(changes)) if (v === null) delete merged[k]
@@ -432,7 +433,7 @@ export function createSync(client, { onChange, onError, intervalMs = 60000, curs
  * as the calendar's previous key past `clear()`, for unsent items sealed with
  * it; `previous(id)` reads it, `forgetPrevious(id)` deletes it.
  */
-export function sessionStore(name = "almanac") {
+export function sessionStore(name = "agentcloud") {
   let memory = null
   const previousKeys = new Map()
   const idb = globalThis.indexedDB

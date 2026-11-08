@@ -497,7 +497,7 @@ mod tests {
         let ics = render_calendar(
             "My Calendar",
             &[IcsEvent {
-                uid: "game-1@almanac".into(),
+                uid: "game-1@agentcloud".into(),
                 summary: "Rockies @ Giants".into(),
                 description: "NBCS BA".into(),
                 location: "Oracle Park".into(),
@@ -516,7 +516,7 @@ mod tests {
         );
         assert!(ics.starts_with("BEGIN:VCALENDAR"));
         assert!(ics.contains("X-WR-CALNAME:My Calendar"));
-        assert!(ics.contains("UID:game-1@almanac"));
+        assert!(ics.contains("UID:game-1@agentcloud"));
         assert!(ics.contains("DTSTART:20260816T200500Z"));
         assert!(ics.contains("TRANSP:TRANSPARENT"));
         assert!(ics.ends_with("END:VCALENDAR\r\n"));

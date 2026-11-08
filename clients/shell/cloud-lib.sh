@@ -1,67 +1,70 @@
-# Almanac shell client library. Source it; do not run it.
-# Agent Cloud shell client. Copied into each Omarchy app; this file in the
-# almanac repo is the source.
+# Agent Cloud shell client library. Source it; do not run it.
+# Copied into each Omarchy app; this file in the agentcloud repo is the source.
 #
-#   . "$(dirname "$0")/almanac-lib.sh"
-#   almanac_load [CAL_ID] || exit       # sets ALMANAC_ID, ALMANAC_ROOT, ALMANAC_TOKEN
-#   out=$(almanac_tmp)
-#   code=$(almanac_curl GET "$ALMANAC_ROOT/notes" "$out")
+#   . "$(dirname "$0")/cloud-lib.sh"
+#   cloud_load [CAL_ID] || exit       # sets CLOUD_ID, CLOUD_ROOT, CLOUD_TOKEN
+#   out=$(cloud_tmp)
+#   code=$(cloud_curl GET "$CLOUD_ROOT/notes" "$out")
 #
 # The write key never enters a shell variable, argv, or a log. Requests carry
 # the auth token, SHA-256(key + "almanac-auth-v1"), passed to curl on stdin
 # (`-K -`), so `ps` cannot see it either. Temp files live in one private
-# directory that is removed on exit.
+# directory that is removed on exit. ("almanac-auth-v1" is the wire format and
+# must not be renamed.)
 #
-# Env: AGENTCLOUD_CONFIG or ALMANAC_CONFIG (credentials file), AGENTCLOUD_BASE or
-# ALMANAC_BASE, ALMANAC_UA, AGENTCLOUD_BIN or ALMANAC_BIN.
+# Env (first set wins): CLOUD_CONFIG, AGENTCLOUD_CONFIG, CLOUD_CONFIG
+# (credentials file); AGENTCLOUD_BASE, CLOUD_BASE; CLOUD_UA, AGENTCLOUD_UA,
+# CLOUD_UA; AGENTCLOUD_BIN, ALMANAC_BIN. The ALMANAC_* names are read only
+# for installs from before the rename.
 
-_almanac_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
-if [[ -z ${ALMANAC_CONFIG-} ]]; then
-  ALMANAC_CONFIG="${AGENTCLOUD_CONFIG:-$_almanac_cfg/agentcloud/hosted-calendars.json}"
+_cloud_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+CLOUD_CONFIG="${CLOUD_CONFIG:-${AGENTCLOUD_CONFIG:-${CLOUD_CONFIG-}}}"
+if [[ -z $CLOUD_CONFIG ]]; then
+  CLOUD_CONFIG="$_cloud_cfg/agentcloud/hosted-calendars.json"
   # Installs from before the rename keep their credentials in ~/.config/almanac.
-  if [[ -z ${AGENTCLOUD_CONFIG-} && ! -f $ALMANAC_CONFIG && -f $_almanac_cfg/almanac/hosted-calendars.json ]]; then
-    ALMANAC_CONFIG="$_almanac_cfg/almanac/hosted-calendars.json"
+  if [[ ! -f $CLOUD_CONFIG && -f $_cloud_cfg/almanac/hosted-calendars.json ]]; then
+    CLOUD_CONFIG="$_cloud_cfg/almanac/hosted-calendars.json"
   fi
 fi
-unset _almanac_cfg
+unset _cloud_cfg
 # Set when the caller chose a server; otherwise the credentials' write URL
 # decides, with the old almanac.dottie.ai host moved to the Agent Cloud host.
-ALMANAC_BASE_SET="${AGENTCLOUD_BASE:+1}${ALMANAC_BASE:+1}"
-ALMANAC_BASE="${AGENTCLOUD_BASE:-${ALMANAC_BASE:-https://cloud.bixbyapps.com}}"
-ALMANAC_UA="${ALMANAC_UA:-Mozilla/5.0 agentcloud-omarchy}"
-ALMANAC_TMPDIR=""
+CLOUD_BASE_SET="${AGENTCLOUD_BASE:+1}${CLOUD_BASE:+1}"
+CLOUD_BASE="${AGENTCLOUD_BASE:-${CLOUD_BASE:-https://cloud.bixbyapps.com}}"
+CLOUD_UA="${CLOUD_UA:-${AGENTCLOUD_UA:-${CLOUD_UA:-Mozilla/5.0 agentcloud-omarchy}}}"
+CLOUD_TMPDIR=""
 
-# A new temp file in this run's private directory (made by almanac_load).
-almanac_tmp() {
-  [[ -n $ALMANAC_TMPDIR && -d $ALMANAC_TMPDIR ]] || return 1
-  mktemp "$ALMANAC_TMPDIR/f.XXXXXX"
+# A new temp file in this run's private directory (made by cloud_load).
+cloud_tmp() {
+  [[ -n $CLOUD_TMPDIR && -d $CLOUD_TMPDIR ]] || return 1
+  mktemp "$CLOUD_TMPDIR/f.XXXXXX"
 }
 
 # Must run in the script's own shell, not in $(...): it sets the trap.
-_almanac_init_tmp() {
-  [[ -n $ALMANAC_TMPDIR ]] && return 0
-  ALMANAC_TMPDIR=$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/almanac.XXXXXX") || return 1
-  chmod 700 "$ALMANAC_TMPDIR"
+_cloud_init_tmp() {
+  [[ -n $CLOUD_TMPDIR ]] && return 0
+  CLOUD_TMPDIR=$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/agentcloud.XXXXXX") || return 1
+  chmod 700 "$CLOUD_TMPDIR"
   local prev
   prev=$(trap -p EXIT | sed -E "s/^trap -- '(.*)' EXIT$/\1/")
   # shellcheck disable=SC2064
-  trap "rm -rf '$ALMANAC_TMPDIR'${prev:+; $prev}" EXIT
+  trap "rm -rf '$CLOUD_TMPDIR'${prev:+; $prev}" EXIT
 }
 
 # Read the calendar from the credentials file and make the private temp dir.
 # Call it directly (not in $(...)). Prints nothing secret.
-almanac_load() {
+cloud_load() {
   local want="${1-}" out
-  [[ -f $ALMANAC_CONFIG ]] || return 1
-  _almanac_init_tmp || return 1
-  out=$(ALMANAC_WANT="$want" python3 - "$ALMANAC_CONFIG" <<'PY'
+  [[ -f $CLOUD_CONFIG ]] || return 1
+  _cloud_init_tmp || return 1
+  out=$(CLOUD_WANT="$want" python3 - "$CLOUD_CONFIG" <<'PY'
 import hashlib, json, sys, os
 try:
     raw = json.load(open(sys.argv[1]))
 except Exception:
     sys.exit(1)
 rows = raw if isinstance(raw, list) else raw.get("calendars", [raw]) if isinstance(raw, dict) else []
-want = os.environ.get("ALMANAC_WANT", "").strip()
+want = os.environ.get("CLOUD_WANT", "").strip()
 for row in rows:
     if not isinstance(row, dict):
         continue
@@ -76,49 +79,49 @@ for row in rows:
 sys.exit(1)
 PY
 ) || return 1
-  ALMANAC_ID=$(sed -n 1p <<<"$out")
+  CLOUD_ID=$(sed -n 1p <<<"$out")
   local write
   write=$(sed -n 2p <<<"$out")
-  ALMANAC_TOKEN=$(sed -n 3p <<<"$out")
-  if [[ -z $ALMANAC_BASE_SET && $write == */v1/c/*/events* && $write != https://almanac.dottie.ai/* ]]; then
-    ALMANAC_ROOT="${write%/events*}"
+  CLOUD_TOKEN=$(sed -n 3p <<<"$out")
+  if [[ -z $CLOUD_BASE_SET && $write == */v1/c/*/events* && $write != https://almanac.dottie.ai/* ]]; then
+    CLOUD_ROOT="${write%/events*}"
   else
-    ALMANAC_ROOT="${ALMANAC_BASE%/}/v1/c/${ALMANAC_ID}"
+    CLOUD_ROOT="${CLOUD_BASE%/}/v1/c/${CLOUD_ID}"
   fi
-  [[ -n $ALMANAC_ID && -n $ALMANAC_TOKEN ]]
+  [[ -n $CLOUD_ID && -n $CLOUD_TOKEN ]]
 }
 
-# almanac_curl METHOD URL OUTFILE [BODYFILE] [IF_MATCH_REV] -> prints the HTTP code.
+# cloud_curl METHOD URL OUTFILE [BODYFILE] [IF_MATCH_REV] -> prints the HTTP code.
 # A 401 on a calendar from before 0.30.0 is retried once after a raw-key
 # request teaches the server the token. The key goes from the file to curl's
 # stdin inside python, never through the shell.
-almanac_curl() {
+cloud_curl() {
   local method="$1" url="$2" out="$3" body="${4-}" rev="${5-}" code
-  code=$(_almanac_curl_token "$method" "$url" "$out" "$body" "$rev") || return 1
-  if [[ $code == 401 ]] && _almanac_teach_token; then
-    code=$(_almanac_curl_token "$method" "$url" "$out" "$body" "$rev") || return 1
+  code=$(_cloud_curl_token "$method" "$url" "$out" "$body" "$rev") || return 1
+  if [[ $code == 401 ]] && _cloud_teach_token; then
+    code=$(_cloud_curl_token "$method" "$url" "$out" "$body" "$rev") || return 1
   fi
   printf '%s' "$code"
 }
 
-_almanac_curl_token() {
+_cloud_curl_token() {
   local method="$1" url="$2" out="$3" body="${4-}" rev="${5-}"
-  local args=(-sS --max-time 20 -A "$ALMANAC_UA" -o "$out" -w '%{http_code}' -X "$method" -K -)
+  local args=(-sS --max-time 20 -A "$CLOUD_UA" -o "$out" -w '%{http_code}' -X "$method" -K -)
   [[ -n $body ]] && args+=(-H 'Content-Type: application/json' --data-binary "@$body")
   [[ -n $rev ]] && args+=(-H "If-Match: \"$rev\"")
-  printf 'header = "Authorization: Bearer %s"\n' "$ALMANAC_TOKEN" | curl "${args[@]}" "$url"
+  printf 'header = "Authorization: Bearer %s"\n' "$CLOUD_TOKEN" | curl "${args[@]}" "$url"
 }
 
-_almanac_teach_token() {
-  [[ -n ${_ALMANAC_TAUGHT-} ]] && return 1
-  _ALMANAC_TAUGHT=1
+_cloud_teach_token() {
+  [[ -n ${_CLOUD_TAUGHT-} ]] && return 1
+  _CLOUD_TAUGHT=1
   local code
-  code=$(ALMANAC_WANT="$ALMANAC_ID" python3 - "$ALMANAC_CONFIG" <<'PY' | curl -sS --max-time 20 -A "$ALMANAC_UA" -o /dev/null -w '%{http_code}' -K - "$ALMANAC_ROOT"
+  code=$(CLOUD_WANT="$CLOUD_ID" python3 - "$CLOUD_CONFIG" <<'PY' | curl -sS --max-time 20 -A "$CLOUD_UA" -o /dev/null -w '%{http_code}' -K - "$CLOUD_ROOT"
 import json, os, sys
 raw = json.load(open(sys.argv[1]))
 rows = raw if isinstance(raw, list) else raw.get("calendars", [raw])
 for row in rows:
-    if isinstance(row, dict) and row.get("id") == os.environ["ALMANAC_WANT"]:
+    if isinstance(row, dict) and row.get("id") == os.environ["CLOUD_WANT"]:
         print('header = "Authorization: Bearer %s"' % row["key"])
         break
 PY
@@ -127,27 +130,27 @@ PY
 }
 
 # `feed` of the calendar: seal or plain.
-almanac_feed() {
+cloud_feed() {
   local out code
-  out=$(almanac_tmp) || return 1
-  code=$(almanac_curl GET "$ALMANAC_ROOT" "$out") || return 1
+  out=$(cloud_tmp) || return 1
+  code=$(cloud_curl GET "$CLOUD_ROOT" "$out") || return 1
   [[ $code == 200 ]] || return 1
   python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("feed") or "plain")' "$out"
 }
 
-_almanac_supports_seal() {
+_cloud_supports_seal() {
   [[ -x $1 ]] && LC_ALL=C grep -aq 'almanac-auth-v1' "$1"
 }
 
-# The agentcloud (or older almanac 0.30.0+) binary, for sealed calendars.
-almanac_bin() {
+# The agentcloud binary (or an older almanac 0.30.0+ build), for sealed calendars.
+cloud_bin() {
   local b
   for b in "${AGENTCLOUD_BIN-}" "${ALMANAC_BIN-}" \
     "$(command -v agentcloud 2>/dev/null)" "$(command -v almanac 2>/dev/null)" \
     "$HOME/Projects/agentcloud/target/release/agentcloud" "$HOME/Projects/agentcloud/target/debug/agentcloud" \
     "$HOME/Projects/almanac/target/release/agentcloud" "$HOME/Projects/almanac/target/debug/agentcloud" \
     "$HOME/Projects/almanac/target/release/almanac" "$HOME/Projects/almanac/target/debug/almanac"; do
-    if [[ -n $b ]] && _almanac_supports_seal "$b"; then
+    if [[ -n $b ]] && _cloud_supports_seal "$b"; then
       printf '%s\n' "$b"
       return 0
     fi
@@ -155,14 +158,14 @@ almanac_bin() {
   return 1
 }
 
-# almanac_open KIND < json > json
+# cloud_open KIND < json > json
 # Opens every sealed item in a response: one item, a list under "events",
 # "todos" or "notes", or a changes feed. Plain items pass through. Server
 # fields (uid, rev, createdAt, updatedAt) are kept; `sealed: true` is added.
-almanac_open() {
+cloud_open() {
   local kind="$1" bin
-  bin=$(almanac_bin) || bin=""
-  AGENTCLOUD_CREDS="$ALMANAC_CONFIG" ALMANAC_CREDS="$ALMANAC_CONFIG" OPEN_BIN="$bin" OPEN_CAL="$ALMANAC_ID" OPEN_KIND="$kind" python3 -c '
+  bin=$(cloud_bin) || bin=""
+  AGENTCLOUD_CREDS="$CLOUD_CONFIG" ALMANAC_CREDS="$CLOUD_CONFIG" OPEN_BIN="$bin" OPEN_CAL="$CLOUD_ID" OPEN_KIND="$kind" python3 -c '
 import json, os, subprocess, sys
 data = json.load(sys.stdin)
 binary, cal = os.environ["OPEN_BIN"], os.environ["OPEN_CAL"]
@@ -171,7 +174,7 @@ def open_one(kind, item):
     if not isinstance(item, dict) or not item.get("seal"):
         return item
     if not binary:
-        sys.stderr.write("sealed calendar needs the almanac binary\n")
+        sys.stderr.write("sealed calendar needs the agentcloud binary\n")
         sys.exit(2)
     proc = subprocess.run([binary, "open", "--cal", cal, "--kind", kind, "--uid", str(item.get("uid") or "")],
                           input=str(item["seal"]).encode(), capture_output=True)
@@ -199,12 +202,12 @@ sys.stdout.write("\n")
 '
 }
 
-# almanac_seal_body KIND UID PLAIN_JSON_FILE OUT_FILE: writes {"seal": "alm1..."}.
+# cloud_seal_body KIND UID PLAIN_JSON_FILE OUT_FILE: writes {"seal": "alm1..."}.
 # Server fields in the plain JSON are dropped before sealing.
-almanac_seal_body() {
+cloud_seal_body() {
   local kind="$1" uid="$2" plain="$3" out="$4" bin clean
-  bin=$(almanac_bin) || return 1
-  clean=$(almanac_tmp) || return 1
+  bin=$(cloud_bin) || return 1
+  clean=$(cloud_tmp) || return 1
   python3 -c '
 import json, sys
 d = json.load(open(sys.argv[1]))
@@ -213,7 +216,7 @@ for k in ("uid", "seal", "rev", "sequence", "createdAt", "updatedAt", "sealed", 
 json.dump(d, open(sys.argv[2], "w"))' "$plain" "$clean" || return 1
   local wire
   # Not a pipe: a failed seal must fail here, not write {"seal": ""}.
-  wire=$(AGENTCLOUD_CREDS="$ALMANAC_CONFIG" ALMANAC_CREDS="$ALMANAC_CONFIG" "$bin" seal --cal "$ALMANAC_ID" --kind "$kind" --uid "$uid" <"$clean") || return 1
+  wire=$(AGENTCLOUD_CREDS="$CLOUD_CONFIG" ALMANAC_CREDS="$CLOUD_CONFIG" "$bin" seal --cal "$CLOUD_ID" --kind "$kind" --uid "$uid" <"$clean") || return 1
   [[ $wire == alm1.* ]] || return 1
   printf '%s' "$wire" |
     python3 -c 'import json,sys; json.dump({"seal": sys.stdin.read().strip()}, open(sys.argv[1], "w"))' "$out" || return 1
@@ -221,7 +224,7 @@ json.dump(d, open(sys.argv[2], "w"))' "$plain" "$clean" || return 1
 }
 
 # The `error` text of a JSON error body, or nothing.
-almanac_error() {
+cloud_error() {
   python3 -c 'import json,sys
 try:
     d = json.load(open(sys.argv[1]))
