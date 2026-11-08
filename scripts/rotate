@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""Rotate one calendar's write key. The new key is made here and never sent.
+
+  scripts/rotate cal_... [--feeds]
+
+1. Makes a new key and saves it in the credentials file as `pendingKey` first,
+   so a crash cannot lose it.
+2. Starts the rotation with the hash of the new key's auth token.
+3. Re-seals every sealed item with the new key.
+4. Commits with the new token. The old key and token stop working. With
+   --feeds every subscribe URL changes too (re-subscribe Calendar.app).
+5. Saves the new key and moves the old one to `previousKeys`, which
+   `almanac open` and `open-file` still try, for older backups and exports.
+
+Run it again after a failure: it picks up `pendingKey`.
+
+ALMANAC_BASE, ALMANAC_CREDS, and ALMANAC_BIN match scripts/pull-export.
+Keys and tokens are never printed.
+"""
+import hashlib
+import json
+import os
+import pathlib
+import secrets
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.error
+import urllib.request
+
+PATHS = {"event": "events", "todo": "todos", "note": "notes"}
+
+
+def fail(message):
+    print(f"rotate: {message}", file=sys.stderr)
+    sys.exit(1)
+
+
+def almanac_bin():
+    chosen = os.environ.get("ALMANAC_BIN", "").strip()
+    if chosen:
+        return chosen
+    found = shutil.which("almanac")
+    if found:
+        return found
+    root = pathlib.Path(__file__).resolve().parent.parent / "target"
+    for name in ("release", "debug"):
+        built = root / name / "almanac"
+        if built.is_file() and os.access(built, os.X_OK):
+            return str(built)
+    fail("needs the almanac binary")
+
+
+def request(base, token, method, path, payload=None, ok=(200, 201, 204)):
+    data = None if payload is None else json.dumps(payload).encode()
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": "almanac-rotate/1"}
+    if data is not None:
+        headers["Content-Type"] = "application/json"
+    req = urllib.request.Request(f"{base}{path}", data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=60) as response:
+            code, raw = response.status, response.read()
+    except urllib.error.HTTPError as e:
+        code, raw = e.code, e.read()
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        fail(f"could not reach {base}: {getattr(e, 'reason', e)}")
+    body = None
+    if raw:
+        try:
+            body = json.loads(raw)
+        except ValueError:
+            body = None
+    if ok is not None and code not in ok:
+        detail = body.get("error") if isinstance(body, dict) else ""
+        fail(f"{method} {path.split('?')[0]} answered {code} {detail}".strip())
+    return code, body
+
+
+def run(binary, args, stdin, creds):
+    env = dict(os.environ, ALMANAC_CREDS=str(creds))
+    proc = subprocess.run([binary, *args], input=stdin, capture_output=True, env=env)
+    if proc.returncode != 0:
+        fail(f"almanac {args[0]} failed")
+    return proc.stdout
+
+
+def write_creds(path, rows):
+    """Atomic, mode 600, in the same directory."""
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".creds-")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(rows, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def main():
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    feeds = "--feeds" in sys.argv[1:]
+    if len(args) != 1 or not args[0].strip():
+        fail("name the calendar: scripts/rotate cal_... [--feeds]")
+    cal_id = args[0].strip()
+    base = os.environ.get("ALMANAC_BASE", "https://almanac.dottie.ai").rstrip("/")
+    creds = pathlib.Path(
+        os.environ.get("ALMANAC_CREDS", "~/.config/almanac/hosted-calendars.json")
+    ).expanduser()
+    try:
+        rows = json.loads(creds.read_text())
+    except (OSError, ValueError):
+        fail("could not read the credentials file")
+    single = isinstance(rows, dict)
+    if single:
+        rows = [rows]
+    entry = next((r for r in rows if isinstance(r, dict) and r.get("id") == cal_id), None)
+    if not entry or not entry.get("key"):
+        fail("that calendar is not in the credentials file")
+
+    binary = almanac_bin()
+    old_key = entry["key"]
+    if not entry.get("pendingKey"):
+        entry["pendingKey"] = secrets.token_hex(24)
+        write_creds(creds, rows[0] if single else rows)
+    new_key = entry["pendingKey"]
+
+    with tempfile.TemporaryDirectory(prefix="almanac-rotate-") as tmp:
+        os.chmod(tmp, 0o700)
+        new_creds = pathlib.Path(tmp) / "new.json"
+        new_creds.write_text(json.dumps([{"id": cal_id, "key": new_key}]))
+        os.chmod(new_creds, 0o600)
+        old_token = run(binary, ["auth-token", "--cal", cal_id], b"", creds).decode().strip()
+        new_token = run(binary, ["auth-token", "--cal", cal_id], b"", new_creds).decode().strip()
+
+        info = f"/v1/c/{cal_id}"
+        if request(base, old_token, "GET", info, ok=None)[0] == 401:
+            # A calendar from before 0.30.0 learns its token on one raw-key login.
+            code, _ = request(base, old_key, "GET", info, ok=None)
+            if code == 401 and request(base, new_token, "GET", info, ok=None)[0] == 200:
+                print("rotate: a commit already went through; saving the new key")
+                finish(creds, rows, single, entry, old_key, new_key, None)
+                return
+            if code != 200:
+                fail("the current key was refused")
+
+        request(base, old_token, "POST", f"{info}/rotate",
+                {"auth_hash": hashlib.sha256(new_token.encode()).hexdigest()})
+
+        _, changes = request(base, new_token, "GET", f"{info}/changes")
+        resealed = 0
+        for kind, path in PATHS.items():
+            for item in changes.get(path, []):
+                if not item.get("seal"):
+                    continue
+                uid = item["uid"]
+                plain = run(binary, ["open", "--cal", cal_id, "--kind", kind, "--uid", uid],
+                            item["seal"].encode(), creds)
+                wire = run(binary, ["seal", "--cal", cal_id, "--kind", kind, "--uid", uid],
+                           plain, new_creds).decode().strip()
+                request(base, new_token, "PUT", f"{info}/{path}/{uid}", {"seal": wire})
+                resealed += 1
+
+        _, view = request(base, new_token, "POST", f"{info}/rotate/commit", {"feeds": feeds})
+    finish(creds, rows, single, entry, old_key, new_key, view)
+    print(f"rotated {cal_id}: {resealed} sealed items re-sealed"
+          + ("; new subscribe URLs are in the credentials file" if feeds else ""))
+
+
+def finish(creds, rows, single, entry, old_key, new_key, view):
+    previous = [k for k in entry.get("previousKeys", []) if k != old_key]
+    entry["previousKeys"] = [old_key, *previous]
+    entry["key"] = new_key
+    entry.pop("pendingKey", None)
+    entry["rotatedAt"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if isinstance(view, dict):
+        if view.get("subscribe"):
+            entry["subscribe"] = view["subscribe"]
+        for kind in ("todos", "notes"):
+            url = (view.get(kind) or {}).get("subscribe")
+            if url and kind in entry and isinstance(entry[kind], dict):
+                entry[kind]["subscribe"] = url
+            elif url:
+                entry[f"{kind}Subscribe"] = url
+    write_creds(creds, rows[0] if single else rows)
+
+
+if __name__ == "__main__":
+    main()

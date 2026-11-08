@@ -144,6 +144,7 @@ mod tests {
             feed: "plain".into(),
             auth_hash: "SECRET-AUTH".into(),
             legacy_auth: true,
+            next_auth_hash: String::new(),
         }
     }
 

@@ -1,3 +1,10 @@
+0.32.0
+
+  Add key rotation
+  Add scripts/rotate
+  Open with previous keys
+  Reseal logs in with the auth token
+
 0.31.0
 
   Add sync revisions

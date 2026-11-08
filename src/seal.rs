@@ -265,7 +265,15 @@ fn file_cmd(cmd: &str, cal: Option<&str>) -> Result<String, String> {
     let out = if cmd == "seal-file" {
         seal_file(&key, &calendar_id, &input)?
     } else {
-        open_file(&key, &calendar_id, &input)?
+        // A file sealed before a rotation opens with the key it was made with.
+        let mut opened = open_file(&key, &calendar_id, &input);
+        for old in previous_keys(cal)? {
+            if opened.is_ok() {
+                break;
+            }
+            opened = open_file(&old, &calendar_id, &input);
+        }
+        opened?
     };
     let mut stdout = std::io::stdout();
     stdout.write_all(&out).map_err(|e| e.to_string())?;
@@ -427,10 +435,53 @@ pub fn run(cmd: &str, args: &[String]) -> Result<String, String> {
         Ok(wire)
     } else {
         let text = std::str::from_utf8(&stdin).map_err(|_| "seal is invalid")?;
-        let plain = open(&key, &calendar_id, &kind, &uid, text.trim())?;
+        let mut plain = open(&key, &calendar_id, &kind, &uid, text.trim());
+        for old in previous_keys(cal.as_deref())? {
+            if plain.is_ok() {
+                break;
+            }
+            plain = open(&old, &calendar_id, &kind, &uid, text.trim());
+        }
+        let plain = plain?;
         let text = String::from_utf8(plain).map_err(|_| "seal was rejected")?;
         Ok(text)
     }
+}
+
+/// Keys this calendar used before a rotation (`previousKeys` in the
+/// credentials entry), newest first. Old backups and exports need them.
+fn previous_keys(want: Option<&str>) -> Result<Vec<String>, String> {
+    let row = load_row(want)?;
+    let list = match row.get("previousKeys") {
+        Some(Value::Array(items)) => items.as_slice(),
+        _ => return Ok(Vec::new()),
+    };
+    Ok(list
+        .iter()
+        .filter_map(|item| match item {
+            Value::String(k) => Some(k.clone()),
+            other => other.get("key").and_then(Value::as_str).map(str::to_string),
+        })
+        .filter(|k| !k.is_empty())
+        .collect())
+}
+
+fn load_row(want: Option<&str>) -> Result<Value, String> {
+    let path = std::env::var("ALMANAC_CREDS").unwrap_or_else(|_| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        format!("{home}/.config/almanac/hosted-calendars.json")
+    });
+    let text = std::fs::read_to_string(&path).map_err(|_| "could not read the calendar key".to_string())?;
+    let value = crate::json::parse(&text).map_err(|_| "could not read the calendar key".to_string())?;
+    let row = match &value {
+        Value::Array(rows) => match want {
+            Some(want) => rows.iter().find(|r| r.get("id").and_then(Value::as_str) == Some(want)).cloned(),
+            None => rows.first().cloned(),
+        },
+        Value::Object(_) => Some(value.clone()),
+        _ => None,
+    };
+    row.ok_or_else(|| "could not read the calendar key".to_string())
 }
 
 fn load_key(want: Option<&str>) -> Result<(String, String), String> {

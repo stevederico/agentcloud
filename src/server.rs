@@ -443,6 +443,9 @@ fn scoped(state: &AppState, req: &Request, method: &str, rest: &str) -> Response
             _ => json_err(404, "not found"),
         };
     };
+    if let Some(step) = rest.strip_prefix("rotate") {
+        return rotate(state, req, id, method, step);
+    }
     if rest == "changes" {
         return changes(state, req, id, method);
     }
@@ -481,6 +484,73 @@ fn scoped(state: &AppState, req: &Request, method: &str, rest: &str) -> Response
         return item_route(state, req, id, method, uid, Resource::Notes);
     }
     json_err(404, "not found")
+}
+
+/// Key rotation, made on the client so the server never sees the new key.
+///
+/// 1. `POST /v1/c/{id}/rotate {"auth_hash": sha256(new token)}`: the new token
+///    works next to the old one.
+/// 2. The client re-seals sealed items with the new key (plain PUTs).
+/// 3. `POST /v1/c/{id}/rotate/commit {"feeds": true}`, sent with the NEW
+///    token: the old token and the raw key stop working, sealed trash is
+///    dropped, and with `feeds` every subscribe URL changes.
+///
+/// `POST /v1/c/{id}/rotate/cancel` drops a rotation that was started.
+fn rotate(state: &AppState, req: &Request, cal_id: &str, method: &str, step: &str) -> Response {
+    if method != "POST" || !matches!(step, "" | "/commit" | "/cancel") {
+        return json_err(404, "not found");
+    }
+    let cal = match gate(state, req, cal_id, method) {
+        Ok(cal) => cal,
+        Err(res) => return res,
+    };
+    if is_home(&cal) {
+        return json_err(403, "home calendar keeps its environment key");
+    }
+    let body = if req.body.is_empty() {
+        Value::object(&[])
+    } else {
+        match parse_body(req) {
+            Ok(v) => v,
+            Err(e) => return json_err(400, &e),
+        }
+    };
+    let db = lock_db(state);
+    match step {
+        "" => {
+            let Some(hash) = body.get("auth_hash").or_else(|| body.get("authHash")).and_then(Value::as_str) else {
+                return json_err(400, "auth_hash is required");
+            };
+            if safe_equal(hash, &cal.auth_hash) {
+                return json_err(400, "that is the current key");
+            }
+            match db.begin_rotation(&cal.id, hash) {
+                Ok(()) => json_response(200, r#"{"rotation":"started"}"#),
+                Err(e) => json_err(400, &e),
+            }
+        }
+        "/cancel" => match db.cancel_rotation(&cal.id) {
+            Ok(()) => Response::new(204),
+            Err(e) => json_err(500, &e),
+        },
+        _ => {
+            // Proof of the new key: commit must come with its token.
+            let given = sha256_hex(&bearer(req.header("authorization")));
+            if !safe_equal(&given, &cal.next_auth_hash) {
+                return json_err(409, "commit with the new key's token, after starting a rotation");
+            }
+            let feeds = body.get("feeds").and_then(Value::as_bool).unwrap_or(false);
+            let saved = match db.commit_rotation(&cal.id, feeds) {
+                Ok(row) => row,
+                Err(e) => return json_err(409, &e),
+            };
+            let base = request_base(req, &state.public_base);
+            match calendar_view(&db, &saved, None, &base) {
+                Ok(v) => json_response(200, &stringify(&v)),
+                Err(e) => json_err(500, &e),
+            }
+        }
+    }
 }
 
 /// `events/{uid}`, `todos/{uid}/restore`, ... as (kind, uid, tail).
@@ -1121,7 +1191,7 @@ pub(crate) fn calendar_auth(db: &Db, id: &str, header: &str) -> Option<CalendarR
     // Only hashes are stored; compare hashes. `safe_equal` refuses an empty
     // expected value, so a row without a hash can never authenticate.
     let given = sha256_hex(&token);
-    if safe_equal(&given, &cal.auth_hash) {
+    if safe_equal(&given, &cal.auth_hash) || safe_equal(&given, &cal.next_auth_hash) {
         return Some(cal);
     }
     // The raw write key, accepted until the calendar turns `legacy_auth` off.

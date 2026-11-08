@@ -13,7 +13,8 @@ use crate::util::{event_uid, hex_encode, random_bytes, secret};
 pub(crate) const EVENT_COLS: &str = "uid, summary, description, location, dtstart, dtend, \
      all_day, transparent, sequence, created_at, updated_at, rrule, tzid, seal, rev";
 
-const CAL_COLS: &str = "id, feed_token, key_hash, name, created_at, feed, auth_hash, legacy_auth";
+const CAL_COLS: &str =
+    "id, feed_token, key_hash, name, created_at, feed, auth_hash, legacy_auth, next_auth_hash";
 
 #[derive(Debug, Clone)]
 pub struct CalendarRow {
@@ -27,6 +28,9 @@ pub struct CalendarRow {
     pub auth_hash: String,
     /// Whether the raw write key is still accepted as a bearer.
     pub legacy_auth: bool,
+    /// During a key rotation: the new key's auth-token hash. It works next to
+    /// `auth_hash` until the rotation is committed or cancelled.
+    pub next_auth_hash: String,
     pub name: String,
     pub created_at: String,
     /// `seal` stores ciphertext. `plain` is the readable feed.
@@ -415,6 +419,70 @@ impl Db {
             &[Bind::Text(auth_hash), Bind::Text(id)],
         )?;
         Ok(())
+    }
+
+    /// Start a key rotation: the new key's token works alongside the old one
+    /// until `commit_rotation`, so a client can re-seal items in between.
+    pub fn begin_rotation(&self, id: &str, next_auth_hash: &str) -> Result<(), String> {
+        if !is_sha256_hex(next_auth_hash) {
+            return Err("auth_hash must be 64 lowercase hex characters".into());
+        }
+        self.conn.execute(
+            "UPDATE calendars SET next_auth_hash = ?1 WHERE id = ?2",
+            &[Bind::Text(next_auth_hash), Bind::Text(id)],
+        )?;
+        Ok(())
+    }
+
+    pub fn cancel_rotation(&self, id: &str) -> Result<(), String> {
+        self.conn.execute(
+            "UPDATE calendars SET next_auth_hash = '' WHERE id = ?1",
+            &[Bind::Text(id)],
+        )?;
+        Ok(())
+    }
+
+    /// Finish a rotation: only the new key's token works from now on, the raw
+    /// key never again. Sealed items still in the trash were sealed with the
+    /// old key and could never be opened after a restore, so they go. With
+    /// `feeds`, every subscribe URL gets a new token too.
+    pub fn commit_rotation(&self, id: &str, feeds: bool) -> Result<CalendarRow, String> {
+        let tx = self.conn.begin()?;
+        let cal = self.get_calendar(id)?.ok_or_else(|| "not found".to_string())?;
+        if cal.next_auth_hash.is_empty() {
+            return Err("no rotation in progress".into());
+        }
+        self.conn.execute(
+            "UPDATE calendars SET auth_hash = next_auth_hash, next_auth_hash = '',
+             key_hash = '', legacy_auth = 0 WHERE id = ?1",
+            &[Bind::Text(id)],
+        )?;
+        for table in ["trash_events", "trash_todos", "trash_notes"] {
+            self.conn.execute(
+                &format!("DELETE FROM {table} WHERE calendar_id = ?1 AND seal != ''"),
+                &[Bind::Text(id)],
+            )?;
+        }
+        if feeds {
+            self.conn.execute(
+                "UPDATE calendars SET feed_token = ?1 WHERE id = ?2",
+                &[Bind::Text(&secret()), Bind::Text(id)],
+            )?;
+            let kinds = self.conn.query(
+                "SELECT kind FROM feeds WHERE calendar_id = ?1",
+                &[Bind::Text(id)],
+                |row| row.text(0),
+            )?;
+            for kind in kinds {
+                self.conn.execute(
+                    "UPDATE feeds SET token = ?1 WHERE calendar_id = ?2 AND kind = ?3",
+                    &[Bind::Text(&secret()), Bind::Text(id), Bind::Text(&kind)],
+                )?;
+            }
+        }
+        let row = self.get_calendar(id)?.ok_or_else(|| "not found".to_string())?;
+        tx.commit()?;
+        Ok(row)
     }
 
     /// Stop accepting the raw write key. Also blanks its hash, so the file no
@@ -1060,6 +1128,7 @@ fn row_calendar(row: &crate::sqlite::Row) -> CalendarRow {
         feed: row.text(5),
         auth_hash: row.text(6),
         legacy_auth: row.i64(7) != 0,
+        next_auth_hash: row.text(8),
     }
 }
 
@@ -1184,6 +1253,9 @@ fn migrate_auth_columns(db: &Connection) -> Result<(), String> {
     }
     if !cols.iter().any(|c| c == "legacy_auth") {
         db.execute_batch("ALTER TABLE calendars ADD COLUMN legacy_auth INTEGER NOT NULL DEFAULT 1;")?;
+    }
+    if !cols.iter().any(|c| c == "next_auth_hash") {
+        db.execute_batch("ALTER TABLE calendars ADD COLUMN next_auth_hash TEXT NOT NULL DEFAULT '';")?;
     }
     Ok(())
 }

@@ -7,7 +7,8 @@ The calendar's subscribe URL then returns shells until a client opens them.
   scripts/reseal cal_...
 
 ALMANAC_BASE, ALMANAC_CREDS, and ALMANAC_BIN match scripts/pull-export.
-The key is read by `almanac seal` and is never printed.
+The key is read by `almanac seal` and is never printed or sent: requests carry
+the auth token from `almanac auth-token`.
 """
 import json
 import os
@@ -65,7 +66,7 @@ def seal_item(binary, cal_id, kind, uid, item):
     plain = {
         k: v
         for k, v in item.items()
-        if k not in ("createdAt", "updatedAt", "sequence", "seal")
+        if k not in ("createdAt", "updatedAt", "sequence", "seal", "rev")
     }
     proc = subprocess.run(
         [binary, "seal", "--cal", cal_id, "--kind", kind, "--uid", uid],
@@ -94,6 +95,11 @@ def main():
         fail("could not read that calendar's key")
 
     binary = almanac_bin()
+    # Log in with the auth token, not the key: the server never needs the key.
+    proc = subprocess.run([binary, "auth-token", "--cal", cal_id], capture_output=True)
+    if proc.returncode != 0:
+        fail("could not derive the auth token")
+    key = proc.stdout.decode().strip()
     _, events = request(base, key, "GET", f"/v1/c/{cal_id}/events")
     _, todos = request(base, key, "GET", f"/v1/c/{cal_id}/todos")
     _, notes = request(base, key, "GET", f"/v1/c/{cal_id}/notes?body=true")
