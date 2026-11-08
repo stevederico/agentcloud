@@ -1,3 +1,10 @@
+0.33.0
+
+  Seal pull-export copies
+  Document auth, sync, trash, rotation
+  Skill sends the auth token
+  Harden test server startup
+
 0.32.0
 
   Add key rotation

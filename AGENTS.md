@@ -27,6 +27,47 @@ Success `201`:
 
 Store `id` and `key`. The key is the write secret. It is shown once and cannot be recovered; only its hash is stored. The same key writes events and todos. The response also has `todos.write`, `todos.subscribe`, `notes.write` and `notes.subscribe`.
 
+## Auth
+
+Send the auth token, not the key: `TOKEN = sha256hex(KEY + "almanac-auth-v1")`.
+
+```bash
+TOKEN=$(printf '%s' "${KEY}almanac-auth-v1" | sha256sum | cut -d' ' -f1)   # or: almanac auth-token
+```
+
+The token logs in but cannot open a seal (the seal key is `sha256(KEY + "almanac-seal-v1")`), so a client that only sends the token keeps every seal away from the server. Below, `$KEY` in `Authorization` means this token.
+
+The raw key still works while `GET /v1/c/{id}` shows `"legacyAuth": true` (calendars from before 0.30.0, or created without `auth_hash`). The first raw-key login records the token. `PATCH /v1/c/{id}` with `{"legacy_auth": false}` turns the raw key off for good.
+
+Create without ever sending a key: `POST /calendars` with `{"name":"…","auth_hash":"<sha256hex(TOKEN)>"}`. The response has no `key`; the one you made is the only copy.
+
+## Sync
+
+Every event, todo and note has `rev`, from one counter per calendar.
+
+```bash
+curl -sS "$BASE/v1/c/$ID/changes?since=$REV" -H "Authorization: Bearer $KEY"
+```
+
+Returns `rev` (the new cursor), the `events`, `todos` and `notes` changed after `since` (note bodies included), and `deleted: [{kind, uid, rev}]`. `since=0` is everything. `410` means the cursor is older than the trash: sync again from `0`.
+
+Conflicts: send `If-Match: "<rev>"` on `PUT`, `PATCH` or `DELETE` of one item. `412 {"deleted": bool, "current": item|null}` means it changed or was deleted since you read it. Without `If-Match` the last write wins.
+
+## Trash
+
+Deleted items stay 30 days. `GET /v1/c/{id}/trash` lists them, newest first, each with `kind`, `deletedAt`, `deletedRev`. `POST /v1/c/{id}/{events|todos|notes}/{uid}/restore` brings one back (`404` not in the trash, `409` that uid is live again). A restored series keeps its exdates and overrides.
+
+## Rotate the key
+
+`scripts/rotate cal_… [--feeds]` does all of this:
+
+1. Make the new key on the client. Save it first.
+2. `POST /v1/c/{id}/rotate` `{"auth_hash":"<sha256hex(new token)>"}`. Both tokens work now.
+3. Re-seal sealed items with the new key (plain `PUT`s).
+4. `POST /v1/c/{id}/rotate/commit` `{"feeds":true}` with the **new** token. The old key and token stop working, sealed trash is dropped, and `feeds: true` changes every subscribe URL.
+
+`POST /v1/c/{id}/rotate/cancel` drops a started rotation. The `home` calendar keeps its environment key (`403`).
+
 ## Delete
 
 ```bash
@@ -112,11 +153,11 @@ curl -sS -X DELETE "$WRITE/standup/overrides" \
 
 ## Seals
 
-New calendars default to `feed: "seal"`. Each event, todo, and note is one `alm1.` ciphertext of its JSON, sealed with that calendar's write key. The server stores the blob and the uid. It does not have the key. `PUT` body is `{"seal":"alm1.…"}`. `GET` returns `uid`, `seal`, `createdAt`, `updatedAt`. Feeds for a sealed row are a shell with `UID` and `X-ALMANAC-SEAL` only.
+New calendars default to `feed: "seal"`. Each event, todo, and note is one `alm1.` ciphertext of its JSON, sealed with a key derived from that calendar's write key. The server stores the blob and the uid. A client that sends only the auth token (see Auth) never gives it the key. `PUT` body is `{"seal":"alm1.…"}`. `GET` returns `uid`, `seal`, `createdAt`, `updatedAt`. Feeds for a sealed row are a shell with `UID` and `X-ALMANAC-SEAL` only.
 
 `feed: "plain"` is today's field API and a readable ICS, VTODO, or Atom feed. `PATCH /v1/c/{id}` with `{"feed":"seal"}` or `{"feed":"plain"}` sets the mode. Existing rows stay as they are until a client that has the key rewrites them. `scripts/reseal` does that for one calendar id passed on the command line.
 
-`almanac seal` and `almanac open` read the key from `~/.config/almanac/hosted-calendars.json` and do not print it.
+`almanac seal` and `almanac open` read the key from `~/.config/almanac/hosted-calendars.json` and do not print it. `open` also tries `previousKeys` (kept by `scripts/rotate`). `almanac auth-token` prints the token. `almanac seal-file` / `open-file` seal a whole file (stdin to stdout) for the calendar; `scripts/pull-export` stores its exports that way.
 
 ## Todos
 

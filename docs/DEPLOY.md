@@ -20,7 +20,9 @@ On macOS, `./bin/almanac start` builds the binary, copies it to `~/.local/share/
 
 `DB_KEY` is the passphrase for the SQLite file (`openssl rand -hex 32`). It is not stored in the file. With it set, a stolen `calendar.db` or an on-volume backup does not show event text, todo titles, note bodies, names, or feed tokens. Unset, the file stays plaintext, which is how tests and an existing deploy behave until the key is set.
 
-The running process can still read the file, and so can anyone with the write key or a feed URL. Someone who also has `DB_KEY` can decrypt the file. `scripts/pull-export` stays a plaintext JSON copy on the machine that runs it.
+The running process can still read the file, and so can anyone with the write key or a feed URL. Someone who also has `DB_KEY` can decrypt the file. `scripts/pull-export` seals each copy with the calendar's key (`almanac seal-file`), so its folder holds no plaintext.
+
+`almanac stats --db PATH` prints row counts (calendars, events, todos, notes, trash) with `DB_KEY` from the environment. It runs migrations, so point it at a copy, as the restore test does.
 
 On the next boot with `DB_KEY` set, a plaintext file is encrypted and the plaintext copy is deleted. A wrong key, or an encrypted file with no key, refuses to start and does not overwrite the file.
 
@@ -32,7 +34,7 @@ The service copies its own database every `BACKUP_INTERVAL_HOURS` (default 6) in
 
 Those copies live on the same volume as the database. They cover a bad deploy or a corrupted file, not losing the volume.
 
-Railway's own volume backups need the Pro plan, and Railway deletes them with the volume anyway, so they would not cover losing it either. What does survive is a copy on another machine. `scripts/pull-export` fetches `GET /v1/c/{id}/export` (every event, todo and note body, no keys) into `~/.local/share/almanac-backups` (mode 700, files 600) and keeps the newest 30. It reads the key from `~/.config/almanac/hosted-calendars.json` and never prints it. Run it by hand, or once a day with the systemd user timer:
+Railway's own volume backups need the Pro plan, and Railway deletes them with the volume anyway, so they would not cover losing it either. What does survive is a copy on another machine. `scripts/pull-export` fetches `GET /v1/c/{id}/export` (every event, todo and note body, no keys) into `~/.local/share/almanac-backups` (mode 700, files 600) and keeps the newest 30. It reads the key from `~/.config/almanac/hosted-calendars.json`, logs in with the auth token, and never prints either. Each copy is sealed (`.alm`); read one with `almanac open-file < almanac-cal_….alm`. Run it by hand, or once a day with the systemd user timer:
 
 ```bash
 mkdir -p ~/.config/systemd/user

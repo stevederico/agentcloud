@@ -16,13 +16,13 @@ A default calendar already exists. Events, todos and notes all live on it and on
 BASE=https://almanac.dottie.ai
 CREDS=$HOME/.config/almanac/hosted-calendars.json
 ID=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[0]['id'])" "$CREDS")
-KEY=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[0]['key'])" "$CREDS")
-AUTH="Authorization: Bearer $KEY"; J="Content-Type: application/json"
+TOKEN=$(python3 -c "import hashlib,json,sys;k=json.load(open(sys.argv[1]))[0]['key'];print(hashlib.sha256((k+'almanac-auth-v1').encode()).hexdigest())" "$CREDS")
+AUTH="Authorization: Bearer $TOKEN"; J="Content-Type: application/json"
 ```
 
 The default calendar is the first entry of `~/.config/almanac/hosted-calendars.json` (a JSON list of `id`, `name`, `subscribe`, `write`, `key`, `createdAt`). Nothing about it is hardcoded here.
 
-Never print, log or paste `$KEY`. A key is shown once, when its calendar is created, and the server keeps only a hash of it, so that file is the only copy. Test a key by status code only.
+Send `$TOKEN`, never the key: the token logs in but cannot open a seal, so the key never reaches the server. Never print, log or paste the key or `$TOKEN`. A key is shown once, when its calendar is created, and the server keeps only a hash, so that file is the only copy. Test by status code only. A `401` with the token on a calendar from before 0.30.0 clears after one request that sends the key itself (every Dottie app does that on sign-in).
 
 Every request needs a `User-Agent`. `-A "Claude-Agent"` works. An empty or default curl one gets a Cloudflare 403.
 
@@ -86,12 +86,16 @@ curl -sS -A "Claude-Agent" "$BASE/v1/c/$ID/notes?q=ideas&tag=work" -H "$AUTH"
 - Wrong types are a `400`, not ignored. Read the error text.
 - One write budget of 120 per minute covers events, todos and notes together. A `429` has `retry-after`.
 - `401` is a wrong key. `404` is a bad uid.
+- Deletes go to a 30-day trash. Undo: `POST …/{events|todos|notes}/<uid>/restore`. List: `GET $BASE/v1/c/$ID/trash`.
+- Every item has `rev`. `GET …/changes?since=<rev>` is what changed (and `deleted`). Send `If-Match: "<rev>"` to avoid overwriting an edit made elsewhere; `412` means it changed.
 
 ## Export and feeds
 
 `GET $BASE/v1/c/$ID/export?format=json|md` returns everything (events, todos, notes with bodies) with no secrets. 10 per hour.
 
-Back up: run `~/Projects/almanac/scripts/pull-export`. It saves a private copy of the export in `~/.local/share/almanac-backups` (keeps the newest 30) and prints one line with the counts. Use it when asked to back up, and before anything risky. Never paste a backup's contents: it holds his notes. It reads the key itself. Scheduling it (a systemd timer, see `docs/DEPLOY.md`) is his call: do not install it unless asked.
+Back up: run `~/Projects/almanac/scripts/pull-export`. It saves a sealed copy of the export in `~/.local/share/almanac-backups` (keeps the newest 30) and prints one line with the counts. Use it when asked to back up, and before anything risky. Read one with `almanac open-file < file.alm`; never paste its contents: it holds his notes. It reads the key itself.
+
+Rotate the key (only if asked, or after a leak): `~/Projects/almanac/scripts/rotate <id> --feeds`. The new key is made locally and saved to the credentials file; `--feeds` also changes the subscribe URLs, so Calendar.app must be re-subscribed. Scheduling it (a systemd timer, see `docs/DEPLOY.md`) is his call: do not install it unless asked.
 
 `GET $BASE/v1/c/$ID` lists the calendar's feed URLs (events, todos, notes). Those URLs carry read tokens: give them out only when asked. The events feed is already subscribed in Calendar.app. The todos (VTODO `.ics`) and notes (Atom) feeds are not subscribed anywhere yet.
 
@@ -99,7 +103,7 @@ Back up: run `~/Projects/almanac/scripts/pull-export`. It saves a private copy o
 
 Create (only if asked): `POST $BASE/calendars` with `{"name":"Optional Title"}`. The response is the only time the `key` is shown. Store `id` and `key` in `~/.config/almanac/hosted-calendars.json` at once, mode 600, never in a synced folder.
 
-Delete (only if asked): `DELETE $BASE/v1/c/$ID` with the same key. `204` when it is gone, including its events, todos, notes and feeds. A missing id or a wrong key is `401`. The `home` calendar cannot be deleted.
+Delete (only if asked): `DELETE $BASE/v1/c/$ID` with the same token. `204` when it is gone, including its events, todos, notes and feeds. A missing id or a wrong key is `401`. The `home` calendar cannot be deleted.
 
 Old local home calendar (`AGENT_KEY` in `~/Projects/almanac/.env`, `PUT $BASE/v1/events/<uid>`) is not the default.
 

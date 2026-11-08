@@ -48,25 +48,36 @@ fn start_server(db: &str) -> (ServerGuard, u16) {
 }
 
 fn start_server_with(db: &str, env: &[(&str, &str)]) -> (ServerGuard, u16) {
-    let port = free_port();
-    let child = Command::new(env!("CARGO_BIN_EXE_almanac"))
-        .env("PORT", port.to_string())
-        .env("HOST", "127.0.0.1")
-        .env("DB_PATH", db)
-        .envs(env.iter().copied())
-        .current_dir(std::env::temp_dir())
-        .spawn()
-        .expect("spawn almanac");
-
-    let guard = ServerGuard(child);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    while Instant::now() < deadline {
-        if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-            return (guard, port);
+    // A port another process grabbed after the probe makes our server exit
+    // with a bind error while the connect below reaches the other one. Check
+    // that ours is still alive, and try a fresh port if not.
+    for _ in 0..5 {
+        let port = free_port();
+        let child = Command::new(env!("CARGO_BIN_EXE_almanac"))
+            .env("PORT", port.to_string())
+            .env("HOST", "127.0.0.1")
+            .env("DB_PATH", db)
+            .envs(env.iter().copied())
+            .current_dir(std::env::temp_dir())
+            .spawn()
+            .expect("spawn almanac");
+        let mut guard = ServerGuard(child);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if matches!(guard.0.try_wait(), Ok(Some(_))) {
+                break;
+            }
+            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                std::thread::sleep(Duration::from_millis(100));
+                if matches!(guard.0.try_wait(), Ok(None)) {
+                    return (guard, port);
+                }
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
         }
-        std::thread::sleep(Duration::from_millis(50));
     }
-    panic!("server did not start on port {port}");
+    panic!("server did not start");
 }
 
 #[test]
@@ -354,6 +365,7 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
             .env("ALMANAC_CREDS", &creds)
             .env("ALMANAC_BACKUP_DIR", &dest)
             .env("ALMANAC_BACKUP_KEEP", "2")
+            .env("ALMANAC_BIN", env!("CARGO_BIN_EXE_almanac"))
             .output()
             .unwrap()
     };
@@ -370,7 +382,18 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
     let saved = files();
     assert_eq!(saved.len(), 1);
-    let text = std::fs::read_to_string(&saved[0]).unwrap();
+    let raw = std::fs::read(&saved[0]).unwrap();
+    assert!(raw.starts_with(b"ALMF1\n"), "the export is sealed on disk");
+    let text = String::from_utf8_lossy(&raw);
+    assert!(!text.contains("Backed up") && !text.contains("still here"), "no plaintext on disk");
+    let opened = Command::new(env!("CARGO_BIN_EXE_almanac"))
+        .arg("open-file")
+        .env("ALMANAC_CREDS", &creds)
+        .stdin(std::fs::File::open(&saved[0]).unwrap())
+        .output()
+        .unwrap();
+    assert!(opened.status.success(), "{}", String::from_utf8_lossy(&opened.stderr));
+    let text = String::from_utf8_lossy(&opened.stdout);
     assert!(text.contains("Backed up") && text.contains("still here"), "the note is in the export");
     assert!(!text.contains(&key), "a backup must never hold the key");
     assert_eq!(std::fs::metadata(&saved[0]).unwrap().permissions().mode() & 0o777, 0o600);
@@ -397,6 +420,7 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     write_creds(&key);
     let down = Command::new("python3")
         .arg(&script)
+        .env("ALMANAC_BIN", env!("CARGO_BIN_EXE_almanac"))
         .env("ALMANAC_BASE", "http://127.0.0.1:1")
         .env("ALMANAC_CREDS", &creds)
         .env("ALMANAC_BACKUP_DIR", &dest)
