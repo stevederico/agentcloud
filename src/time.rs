@@ -28,6 +28,11 @@ pub fn parse_instant(value: &str) -> Option<String> {
     parse_rfc3339_millis(value).map(format_utc_millis)
 }
 
+/// The instant `days` days before now, in the stored format.
+pub fn days_ago_iso(days: i64) -> String {
+    format_utc_millis(unix_millis() - days * 86_400_000)
+}
+
 pub fn add_hour(iso: &str) -> String {
     let ms = parse_rfc3339_millis(iso).expect("stored instant");
     format_utc_millis(ms + 3_600_000)

@@ -13,7 +13,7 @@ use crate::time::now_iso;
 use crate::todos::{pack_tags, parse_tags, unpack_tags};
 use crate::util::prefixed_uid;
 
-const NOTE_COLS: &str = "uid, title, body, tags, pinned, sequence, created_at, updated_at, seal";
+pub(crate) const NOTE_COLS: &str = "uid, title, body, tags, pinned, sequence, created_at, updated_at, seal, rev";
 
 const MAX_TITLE: usize = 200;
 
@@ -31,6 +31,7 @@ pub struct NoteRow {
     pub created_at: String,
     pub updated_at: String,
     pub seal: String,
+    pub rev: i64,
 }
 
 /// What a write may set. `None` leaves the stored value alone.
@@ -65,7 +66,7 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-fn row_note(row: &Row) -> NoteRow {
+pub(crate) fn row_note(row: &Row) -> NoteRow {
     NoteRow {
         uid: row.text(0),
         title: row.text(1),
@@ -76,6 +77,7 @@ fn row_note(row: &Row) -> NoteRow {
         created_at: row.text(6),
         updated_at: row.text(7),
         seal: row.text(8),
+        rev: row.i64(9),
     }
 }
 
@@ -368,6 +370,14 @@ pub fn parse_note_fields(body: &Value, partial: bool) -> Result<NoteFields, Stri
 /// `with_body` false leaves the text out: a list of long notes would otherwise
 /// be megabytes.
 pub fn json_note(row: &NoteRow, with_body: bool) -> Value {
+    let mut value = json_note_fields(row, with_body);
+    if let Value::Object(map) = &mut value {
+        map.insert("rev".into(), Value::Number(row.rev));
+    }
+    value
+}
+
+fn json_note_fields(row: &NoteRow, with_body: bool) -> Value {
     if !row.seal.is_empty() {
         return Value::object(&[
             ("uid", Value::String(row.uid.clone())),

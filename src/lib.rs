@@ -14,6 +14,7 @@ pub mod seal;
 pub mod server;
 pub mod sha256;
 pub mod sqlite;
+pub mod sync;
 pub mod time;
 pub mod todos;
 pub mod tz;

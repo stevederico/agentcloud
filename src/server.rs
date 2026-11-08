@@ -443,6 +443,22 @@ fn scoped(state: &AppState, req: &Request, method: &str, rest: &str) -> Response
             _ => json_err(404, "not found"),
         };
     };
+    if rest == "changes" {
+        return changes(state, req, id, method);
+    }
+    if rest == "trash" {
+        return trash(state, req, id, method);
+    }
+    if let Some((kind, uid, tail)) = item_path(rest) {
+        if tail == "restore" {
+            return restore(state, req, id, method, kind, uid);
+        }
+        if tail.is_empty() && matches!(method, "PUT" | "PATCH" | "DELETE") {
+            if let Some(res) = if_match(state, req, id, kind, uid) {
+                return res;
+            }
+        }
+    }
     if rest == "events" {
         return events(state, req, id, method, Target::Collection);
     }
@@ -465,6 +481,142 @@ fn scoped(state: &AppState, req: &Request, method: &str, rest: &str) -> Response
         return item_route(state, req, id, method, uid, Resource::Notes);
     }
     json_err(404, "not found")
+}
+
+/// `events/{uid}`, `todos/{uid}/restore`, ... as (kind, uid, tail).
+fn item_path(rest: &str) -> Option<(&'static str, &str, &str)> {
+    for (prefix, kind) in [("events/", "event"), ("todos/", "todo"), ("notes/", "note")] {
+        if let Some(after) = rest.strip_prefix(prefix) {
+            let (uid, tail) = after.split_once('/').unwrap_or((after, ""));
+            if uid.is_empty() {
+                return None;
+            }
+            return Some((kind, uid, tail));
+        }
+    }
+    None
+}
+
+/// `If-Match: "<rev>"` on an item write. `None` lets the write go ahead.
+/// A missing header keeps the old last-write-wins behavior for agents.
+/// `*` only requires that the item exists.
+fn if_match(state: &AppState, req: &Request, cal_id: &str, kind: &str, uid: &str) -> Option<Response> {
+    let header = req.header("if-match").trim();
+    if header.is_empty() {
+        return None;
+    }
+    // After auth, so a stranger cannot probe which uids exist.
+    let Some(cal) = authenticate(state, req, cal_id) else {
+        return Some(json_err(401, "unauthorized"));
+    };
+    let db = lock_db(state);
+    let current = match db.item_rev(kind, &cal.id, uid) {
+        Ok(rev) => rev,
+        Err(e) => return Some(json_err(500, &e)),
+    };
+    let wanted = header.trim_start_matches("W/").trim_matches('"');
+    let ok = match (wanted, current) {
+        ("*", Some(_)) => true,
+        (w, Some(rev)) => w.parse::<i64>().ok() == Some(rev),
+        (_, None) => false,
+    };
+    if ok {
+        return None;
+    }
+    let item = match (kind, current) {
+        (_, None) => Value::Null,
+        ("event", _) => db.get_event(&cal.id, uid).ok().flatten().map(|r| json_event(&r)).unwrap_or(Value::Null),
+        ("todo", _) => db.get_todo(&cal.id, uid).ok().flatten().map(|r| todos::json_todo(&r)).unwrap_or(Value::Null),
+        _ => db.get_note(&cal.id, uid).ok().flatten().map(|r| notes::json_note(&r, true)).unwrap_or(Value::Null),
+    };
+    Some(json_response(
+        412,
+        &stringify(&Value::object(&[
+            ("error", Value::String("changed elsewhere".into())),
+            ("deleted", Value::Bool(current.is_none())),
+            ("current", item),
+        ])),
+    ))
+}
+
+/// `GET /v1/c/{id}/changes?since=<rev>`. `since` 0 or absent is everything.
+fn changes(state: &AppState, req: &Request, cal_id: &str, method: &str) -> Response {
+    if method != "GET" {
+        return json_err(404, "not found");
+    }
+    let since = match query_param(req, "since").as_deref() {
+        None | Some("") => 0,
+        Some(s) => match s.parse::<i64>() {
+            Ok(n) if n >= 0 => n,
+            _ => return json_err(400, "since must be a revision number"),
+        },
+    };
+    let cal = match gate(state, req, cal_id, method) {
+        Ok(cal) => cal,
+        Err(res) => return res,
+    };
+    let db = lock_db(state);
+    match db.changes(&cal.id, since) {
+        Ok(c) => json_response(200, &stringify(&crate::sync::json_changes(&c))).header("cache-control", "no-store"),
+        Err(crate::sync::ChangesError::Expired) => json_response(
+            410,
+            &stringify(&Value::object(&[(
+                "error",
+                Value::String("cursor is older than the trash; sync again from 0".into()),
+            )])),
+        ),
+        Err(crate::sync::ChangesError::Db(e)) => json_err(500, &e),
+    }
+}
+
+/// `GET /v1/c/{id}/trash`: deleted items still restorable, newest first.
+fn trash(state: &AppState, req: &Request, cal_id: &str, method: &str) -> Response {
+    if method != "GET" {
+        return json_err(404, "not found");
+    }
+    let cal = match gate(state, req, cal_id, method) {
+        Ok(cal) => cal,
+        Err(res) => return res,
+    };
+    match lock_db(state).list_trash(&cal.id) {
+        Ok(items) => json_response(
+            200,
+            &stringify(&Value::object(&[
+                ("days", Value::Number(crate::sync::TRASH_DAYS)),
+                ("items", Value::Array(items)),
+            ])),
+        )
+        .header("cache-control", "no-store"),
+        Err(e) => json_err(500, &e),
+    }
+}
+
+/// `POST /v1/c/{id}/{events|todos|notes}/{uid}/restore`.
+fn restore(state: &AppState, req: &Request, cal_id: &str, method: &str, kind: &str, uid: &str) -> Response {
+    if method != "POST" || uid.contains('/') {
+        return json_err(404, "not found");
+    }
+    let cal = match gate(state, req, cal_id, method) {
+        Ok(cal) => cal,
+        Err(res) => return res,
+    };
+    let db = lock_db(state);
+    match db.restore_item(kind, &cal.id, uid) {
+        Ok(true) => {}
+        Ok(false) => return json_err(404, "not in the trash"),
+        Err(e) if e == "exists" => return json_err(409, "an item with this uid exists"),
+        Err(e) => return json_err(500, &e),
+    }
+    let item = match kind {
+        "event" => db.get_event(&cal.id, uid).map(|r| r.map(|r| json_event(&r))),
+        "todo" => db.get_todo(&cal.id, uid).map(|r| r.map(|r| todos::json_todo(&r))),
+        _ => db.get_note(&cal.id, uid).map(|r| r.map(|r| notes::json_note(&r, true))),
+    };
+    match item {
+        Ok(Some(v)) => json_response(200, &stringify(&v)),
+        Ok(None) => json_err(500, "restore failed"),
+        Err(e) => json_err(500, &e),
+    }
 }
 
 /// `GET /v1/c/{id}/export?format=json|md`: everything in the calendar, in one

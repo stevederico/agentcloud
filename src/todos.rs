@@ -12,8 +12,8 @@ use crate::sqlite::{Bind, Connection, Row};
 use crate::time::{is_ymd, now_iso, parse_instant};
 use crate::util::{prefixed_uid, secret};
 
-const TODO_COLS: &str =
-    "uid, title, description, due, priority, done, completed_at, tags, sequence, created_at, updated_at, seal";
+pub(crate) const TODO_COLS: &str =
+    "uid, title, description, due, priority, done, completed_at, tags, sequence, created_at, updated_at, seal, rev";
 
 const MAX_TAGS: usize = 10;
 
@@ -34,6 +34,7 @@ pub struct TodoRow {
     pub created_at: String,
     pub updated_at: String,
     pub seal: String,
+    pub rev: i64,
 }
 
 /// What a write may set. `None` leaves the stored value alone; for text fields
@@ -96,7 +97,7 @@ pub(crate) fn unpack_tags(raw: &str) -> Vec<String> {
         .collect()
 }
 
-fn row_todo(row: &Row) -> TodoRow {
+pub(crate) fn row_todo(row: &Row) -> TodoRow {
     TodoRow {
         uid: row.text(0),
         title: row.text(1),
@@ -110,6 +111,7 @@ fn row_todo(row: &Row) -> TodoRow {
         created_at: row.text(9),
         updated_at: row.text(10),
         seal: row.text(11),
+        rev: row.i64(12),
     }
 }
 
@@ -488,6 +490,14 @@ pub(crate) fn parse_tags(items: &[Value]) -> Result<Vec<String>, String> {
 }
 
 pub fn json_todo(row: &TodoRow) -> Value {
+    let mut value = json_todo_fields(row);
+    if let Value::Object(map) = &mut value {
+        map.insert("rev".into(), Value::Number(row.rev));
+    }
+    value
+}
+
+fn json_todo_fields(row: &TodoRow) -> Value {
     if !row.seal.is_empty() {
         return Value::object(&[
             ("uid", Value::String(row.uid.clone())),

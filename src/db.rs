@@ -10,8 +10,8 @@ use crate::time::{add_hour, is_ymd, now_iso, parse_instant};
 use crate::tz;
 use crate::util::{event_uid, hex_encode, random_bytes, secret};
 
-const EVENT_COLS: &str = "uid, summary, description, location, dtstart, dtend, \
-     all_day, transparent, sequence, created_at, updated_at, rrule, tzid, seal";
+pub(crate) const EVENT_COLS: &str = "uid, summary, description, location, dtstart, dtend, \
+     all_day, transparent, sequence, created_at, updated_at, rrule, tzid, seal, rev";
 
 const CAL_COLS: &str = "id, feed_token, key_hash, name, created_at, feed, auth_hash, legacy_auth";
 
@@ -49,6 +49,8 @@ pub struct EventRow {
     pub rrule: String,
     pub tzid: String,
     pub seal: String,
+    /// Calendar-wide revision of the last change. Sync cursor and `If-Match` value.
+    pub rev: i64,
     pub exdates: Vec<String>,
     pub overrides: Vec<EventOverride>,
 }
@@ -278,6 +280,7 @@ impl Db {
         migrate_events(&conn)?;
         crate::todos::migrate(&conn)?;
         crate::notes::migrate(&conn)?;
+        crate::sync::migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -444,6 +447,11 @@ impl Db {
             "DELETE FROM todos WHERE calendar_id = ?1",
             "DELETE FROM notes WHERE calendar_id = ?1",
             "DELETE FROM feeds WHERE calendar_id = ?1",
+            // After the items: their delete triggers just filled these.
+            "DELETE FROM trash_events WHERE calendar_id = ?1",
+            "DELETE FROM trash_todos WHERE calendar_id = ?1",
+            "DELETE FROM trash_notes WHERE calendar_id = ?1",
+            "DELETE FROM trash_event_exceptions WHERE calendar_id = ?1",
             "DELETE FROM calendars WHERE id = ?1",
         ] {
             self.conn.execute(sql, &id_bind)?;
@@ -788,6 +796,7 @@ impl Db {
         if self.get_event(calendar_id, uid)?.is_none() {
             return Ok(false);
         }
+        self.trash_exceptions(calendar_id, uid)?;
         self.conn.execute(
             "DELETE FROM event_exceptions WHERE calendar_id = ?1 AND uid = ?2",
             &[Bind::Text(calendar_id), Bind::Text(uid)],
@@ -1054,7 +1063,7 @@ fn row_calendar(row: &crate::sqlite::Row) -> CalendarRow {
     }
 }
 
-fn row_event(row: &crate::sqlite::Row) -> EventRow {
+pub(crate) fn row_event(row: &crate::sqlite::Row) -> EventRow {
     EventRow {
         uid: row.text(0),
         summary: row.text(1),
@@ -1070,6 +1079,7 @@ fn row_event(row: &crate::sqlite::Row) -> EventRow {
         rrule: row.text(11),
         tzid: row.text(12),
         seal: row.text(13),
+        rev: row.i64(14),
         exdates: Vec::new(),
         overrides: Vec::new(),
     }
@@ -1321,7 +1331,7 @@ fn migrate_events_in(db: &Connection) -> Result<(), String> {
     )
 }
 
-fn table_names(db: &Connection) -> Result<Vec<String>, String> {
+pub(crate) fn table_names(db: &Connection) -> Result<Vec<String>, String> {
     db.query(
         "SELECT name FROM sqlite_master WHERE type = 'table'",
         &[],
@@ -1764,6 +1774,14 @@ pub fn json_calendar_created(row: &CalendarRow, key: &str, base: &str) -> Value 
 }
 
 pub fn json_event(row: &EventRow) -> Value {
+    let mut value = json_event_fields(row);
+    if let Value::Object(map) = &mut value {
+        map.insert("rev".into(), Value::Number(row.rev));
+    }
+    value
+}
+
+fn json_event_fields(row: &EventRow) -> Value {
     if !row.seal.is_empty() {
         return Value::object(&[
             ("uid", Value::String(row.uid.clone())),

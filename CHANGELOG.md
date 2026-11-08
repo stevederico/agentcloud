@@ -1,3 +1,11 @@
+0.31.0
+
+  Add sync revisions
+  Add changes feed
+  Add 30-day trash and restore
+  Honor If-Match on item writes
+  Add stats command
+
 0.30.0
 
   Split auth token from write key

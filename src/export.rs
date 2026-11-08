@@ -161,6 +161,7 @@ mod tests {
             created_at: "c".into(),
             updated_at: "u".into(),
             seal: String::new(),
+            rev: 0,
         }
     }
 
@@ -175,6 +176,7 @@ mod tests {
             created_at: "c".into(),
             updated_at: "2026-09-02T00:00:00.000Z".into(),
             seal: String::new(),
+            rev: 0,
         }
     }
 

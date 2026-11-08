@@ -15,6 +15,24 @@ use almanac::json::{stringify, Value};
 use almanac::server::{handle, AppState};
 use almanac::time::now_iso;
 
+/// Empty the trash of items deleted more than `TRASH_DAYS` ago, at boot and
+/// every 6 hours.
+fn spawn_trash_purge(db: Arc<std::sync::Mutex<Db>>) {
+    std::thread::spawn(move || loop {
+        let cutoff = almanac::time::days_ago_iso(almanac::sync::TRASH_DAYS);
+        let result = match db.lock() {
+            Ok(db) => db.purge_trash(&cutoff),
+            Err(poisoned) => poisoned.into_inner().purge_trash(&cutoff),
+        };
+        match result {
+            Ok(0) => {}
+            Ok(n) => println!("{{\"t\":\"{}\",\"msg\":\"trash purged\",\"rows\":{n}}}", now_iso()),
+            Err(e) => eprintln!("trash purge: {e}"),
+        }
+        std::thread::sleep(std::time::Duration::from_secs(6 * 3600));
+    });
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(cmd) = args.first() {
@@ -30,6 +48,35 @@ fn main() {
                     eprintln!("{e}");
                     std::process::exit(1);
                 }
+            }
+        }
+    }
+    if args.first().map(String::as_str) == Some("stats") {
+        // `almanac stats --db PATH`: row counts of a (possibly encrypted)
+        // database, for the restore test. `DB_KEY` from the environment.
+        let path = match args.get(1..3) {
+            Some([flag, path]) if flag == "--db" => path.clone(),
+            _ => {
+                eprintln!("usage: almanac stats --db PATH");
+                std::process::exit(2);
+            }
+        };
+        if !Path::new(&path).exists() {
+            eprintln!("no such file: {path}");
+            std::process::exit(1);
+        }
+        let key = std::env::var("DB_KEY").ok();
+        let result = Db::open_with(&path, key.as_deref()).and_then(|db| db.stats());
+        match result {
+            Ok(counts) => {
+                let pairs: Vec<(&str, Value)> =
+                    counts.into_iter().map(|(k, n)| (k, Value::Number(n))).collect();
+                println!("{}", stringify(&Value::object(&pairs)));
+                return;
+            }
+            Err(e) => {
+                eprintln!("stats: {e}");
+                std::process::exit(1);
             }
         }
     }
@@ -95,6 +142,7 @@ fn main() {
     );
     let public_base = std::env::var("PUBLIC_BASE").unwrap_or_default();
     let mut state = AppState::new(db, public_base);
+    spawn_trash_purge(state.db.clone());
     // TRUSTED_PROXY_HOPS sets which X-Forwarded-For entry counts as the
     // client; the rest tune the caps. See `limits::Limits`.
     state.limits = state.limits.from_env(|k| std::env::var(k).ok());
