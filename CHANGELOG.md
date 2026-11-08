@@ -1,3 +1,9 @@
+0.34.0
+
+  Add shared web client
+  Add shared shell client
+  Accept POST for calendar settings
+
 0.33.0
 
   Seal pull-export copies

@@ -439,7 +439,9 @@ fn scoped(state: &AppState, req: &Request, method: &str, rest: &str) -> Response
         return match method {
             "GET" => calendar_info(state, req, rest),
             "DELETE" => delete_calendar(state, req, rest),
-            "PATCH" => set_calendar_feed(state, req, rest),
+            // POST too: Cloudflare's WAF answers 403 to PATCH before it
+            // reaches the app, so browsers and scripts use POST.
+            "PATCH" | "POST" => set_calendar_feed(state, req, rest),
             _ => json_err(404, "not found"),
         };
     };

@@ -37,7 +37,7 @@ TOKEN=$(printf '%s' "${KEY}almanac-auth-v1" | sha256sum | cut -d' ' -f1)   # or:
 
 The token logs in but cannot open a seal (the seal key is `sha256(KEY + "almanac-seal-v1")`), so a client that only sends the token keeps every seal away from the server. Below, `$KEY` in `Authorization` means this token.
 
-The raw key still works while `GET /v1/c/{id}` shows `"legacyAuth": true` (calendars from before 0.30.0, or created without `auth_hash`). The first raw-key login records the token. `PATCH /v1/c/{id}` with `{"legacy_auth": false}` turns the raw key off for good.
+The raw key still works while `GET /v1/c/{id}` shows `"legacyAuth": true` (calendars from before 0.30.0, or created without `auth_hash`). The first raw-key login records the token. `POST /v1/c/{id}` (or `PATCH`) with `{"legacy_auth": false}` turns the raw key off for good. Cloudflare in front of almanac.dottie.ai answers `403` to `PATCH`: use `POST /v1/c/{id}` for calendar settings and `PUT` for items (it keeps fields you leave out).
 
 Create without ever sending a key: `POST /calendars` with `{"name":"…","auth_hash":"<sha256hex(TOKEN)>"}`. The response has no `key`; the one you made is the only copy.
 

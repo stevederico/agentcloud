@@ -45,6 +45,9 @@ fn turning_legacy_off_rejects_the_raw_key() {
     assert_eq!(field(&info, "legacyAuth").as_bool(), Some(false));
     assert_eq!(call(&app, &cal.key, "GET", &path, None).0, 401);
     assert_eq!(call(&app, &token, "GET", &path, None).0, 200);
+    // POST is the same call (Cloudflare blocks PATCH in front of prod).
+    let (status, _) = call(&app, &token, "POST", &path, Some(r#"{"feed":"plain"}"#));
+    assert_eq!(status, 200);
     // There is no way back: the raw key's hash is gone.
     let (status, _) = call(&app, &token, "PATCH", &path, Some(r#"{"legacy_auth":true}"#));
     assert_eq!(status, 400);
