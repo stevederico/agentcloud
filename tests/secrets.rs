@@ -62,17 +62,21 @@ fn no_tracked_file_holds_a_key_sized_hex_string() {
 #[test]
 fn none_of_this_machines_credentials_are_in_a_tracked_file() {
     let Some(home) = std::env::var_os("HOME") else { return };
-    let path = PathBuf::from(home).join(".config/almanac/hosted-calendars.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    let home = PathBuf::from(home);
+    // The new config dir first, then the old one machines are moving off.
+    let Some(text) = [".config/agentcloud/hosted-calendars.json", ".config/almanac/hosted-calendars.json"]
+        .iter()
+        .find_map(|p| std::fs::read_to_string(home.join(p)).ok())
+    else {
         return; // No credentials here (CI): the hex check above still applies.
     };
-    let list = almanac::json::parse(&text).expect("credentials file is JSON");
+    let list = agentcloud::json::parse(&text).expect("credentials file is JSON");
     let mut secrets: Vec<String> = Vec::new();
     for cal in list.as_array().unwrap_or(&[]) {
-        if let Some(key) = cal.get("key").and_then(almanac::json::Value::as_str) {
+        if let Some(key) = cal.get("key").and_then(agentcloud::json::Value::as_str) {
             secrets.push(key.to_string());
         }
-        let subscribe = cal.get("subscribe").and_then(almanac::json::Value::as_str);
+        let subscribe = cal.get("subscribe").and_then(agentcloud::json::Value::as_str);
         if let Some(token) = subscribe.and_then(|s| s.split("/feed/").nth(1)) {
             secrets.push(token.split(['.', '/', '?']).next().unwrap_or("").to_string());
         }
@@ -97,7 +101,7 @@ fn credential_and_data_paths_are_git_ignored() {
         ".env",
         ".env.production",
         "hosted-calendars.json",
-        "skills/almanac/hosted-calendars.json",
+        "skills/agentcloud/hosted-calendars.json",
         "calendar.db",
         "data/calendar.db",
         "calendar.db.pre-0.8.0",

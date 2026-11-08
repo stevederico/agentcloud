@@ -1,8 +1,10 @@
-# almanac
+# agentcloud
 
 Agent-first calendar, notes, and todos. Request a calendar, subscribe the URL, agents write.
 
-Prod: `https://almanac.dottie.ai`. Do not use `webcal://`.
+Prod: `https://cloud.bixbyapps.com`. Do not use `webcal://`.
+
+Formerly Almanac. The old host `almanac.dottie.ai` is the same service: same keys, same feed URLs. The crypto domains stay `almanac-auth-v1` and `almanac-seal-v1`. Tools read `~/.config/agentcloud/hosted-calendars.json`, else the old `~/.config/almanac/` path, and every `AGENTCLOUD_*` variable also accepts its old `ALMANAC_*` name.
 
 ## Use
 
@@ -17,11 +19,11 @@ Subscribe: Calendar → File → New Calendar Subscription → paste the `subscr
 | Notes | `PUT /v1/c/:id/notes/:uid` | Atom, `?q=` search |
 | Export | `GET /v1/c/:id/export` | JSON or Markdown, no secrets |
 
-Contract: [AGENTS.md](AGENTS.md). Machine-readable: `GET /llms.txt`. Agent skill: [skills/almanac](skills/almanac/SKILL.md). It reads the default calendar from `~/.config/almanac/hosted-calendars.json`.
+Contract: [AGENTS.md](AGENTS.md). Machine-readable: `GET /llms.txt`. Agent skill: [skills/agentcloud](skills/agentcloud/SKILL.md). It reads the default calendar from `~/.config/agentcloud/hosted-calendars.json`.
 
 ## Prod
 
-Hosted at `https://almanac.dottie.ai`. To self-host, run the Dockerfile on any host with a persistent volume at `/app/data`. Steps: [docs/DEPLOY.md](docs/DEPLOY.md).
+Hosted at `https://cloud.bixbyapps.com`. To self-host, run the Dockerfile on any host with a persistent volume at `/app/data`. Steps: [docs/DEPLOY.md](docs/DEPLOY.md).
 
 ## Local
 
@@ -37,7 +39,7 @@ cargo run --release
 
 `FEED_TOKEN` and `AGENT_KEY` seed the local `home` calendar only. Hosted calendars from `POST /calendars` each get their own key.
 
-On macOS, `./bin/almanac start` builds a release binary, copies it to `~/.local/share/almanac` (launchd cannot read Desktop), and installs the LaunchAgent `com.stevederico.almanac`. `./bin/almanac url` prints the subscribe URL. The script's default repo path is `~/Desktop/projects/almanac`; set `ALMANAC_ROOT` if the checkout lives elsewhere. It always binds `localhost`.
+On macOS, `./bin/agentcloud start` builds a release binary, copies it to `~/.local/share/agentcloud` (launchd cannot read Desktop), and installs the LaunchAgent `com.stevederico.agentcloud`. `./bin/agentcloud url` prints the subscribe URL. The script's default repo path is `~/Desktop/projects/agentcloud`; set `AGENTCLOUD_ROOT` if the checkout lives elsewhere. It always binds `localhost`.
 
 | Variable | Purpose |
 |---|---|
@@ -45,7 +47,7 @@ On macOS, `./bin/almanac start` builds a release binary, copies it to `~/.local/
 | `PORT` | Default `18788` |
 | `FEED_TOKEN` | Secret in the home calendar's subscribe URL |
 | `AGENT_KEY` | Bearer token for the home calendar |
-| `CAL_NAME` | Title in Calendar (default `Almanac`) |
+| `CAL_NAME` | Title in Calendar (default `Agent Cloud`) |
 | `DB_PATH` | SQLite file |
 | `DB_KEY` | Passphrase for that file. Unset leaves it plaintext. `openssl rand -hex 32` |
 | `PUBLIC_BASE` | Origin used in feed URLs when set |

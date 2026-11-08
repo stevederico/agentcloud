@@ -2,13 +2,13 @@
 
 mod common;
 
-use almanac::seal::{auth_token, open, seal};
-use almanac::sha256::sha256_hex;
+use agentcloud::seal::{auth_token, open, seal};
+use agentcloud::sha256::sha256_hex;
 use common::*;
 
 const NEW_KEY: &str = "rotated-key-for-tests-0000";
 
-fn begin(app: &almanac::AppState, cal: &Cal, token: &str) -> u16 {
+fn begin(app: &agentcloud::AppState, cal: &Cal, token: &str) -> u16 {
     let body = format!(r#"{{"auth_hash":"{}"}}"#, sha256_hex(&auth_token(NEW_KEY)));
     call(app, token, "POST", &format!("/v1/c/{}/rotate", cal.id), Some(&body)).0
 }
@@ -33,11 +33,11 @@ fn a_rotation_swaps_the_key_and_can_change_the_feeds() {
     assert_eq!(call(&app, &cal.key, "GET", &info, None).0, 401);
     assert_eq!(call(&app, &new, "GET", &info, None).0, 200);
     // Old feed URLs are dead, new ones serve.
-    let (status, _, _) = send(&app, almanac::http::Request::new("GET", &cal.events_feed_path));
+    let (status, _, _) = send(&app, agentcloud::http::Request::new("GET", &cal.events_feed_path));
     assert_eq!(status, 404);
     let fresh = text(&view, "subscribe").strip_prefix(BASE).unwrap().to_string();
     assert_ne!(fresh, cal.events_feed_path);
-    let (status, _, _) = send(&app, almanac::http::Request::new("GET", &fresh));
+    let (status, _, _) = send(&app, agentcloud::http::Request::new("GET", &fresh));
     assert_eq!(status, 200);
 }
 

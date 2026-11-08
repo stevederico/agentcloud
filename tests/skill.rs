@@ -5,7 +5,7 @@ use std::fs;
 use std::path::PathBuf;
 
 fn skill() -> String {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills/almanac/SKILL.md");
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills/agentcloud/SKILL.md");
     fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
 }
 
@@ -22,7 +22,7 @@ fn has_the_front_matter_a_skill_loader_needs() {
         .expect("front matter is never closed")
         + 1;
     let head = &lines[1..close];
-    assert!(head.contains(&"name: almanac"), "{head:?}");
+    assert!(head.contains(&"name: agentcloud"), "{head:?}");
     assert!(head.iter().any(|l| l.starts_with("description:")), "{head:?}");
     assert!(close < 40, "front matter runs to line {close}: is a closing --- missing?");
 }
@@ -83,7 +83,7 @@ fn carries_no_secret_and_no_hardcoded_calendar() {
 #[test]
 fn every_skill_file_is_covered_by_these_checks() {
     // A second file in the skill directory would escape the secret scan above.
-    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills/almanac");
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills/agentcloud");
     let names: Vec<String> = fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())

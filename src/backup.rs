@@ -13,6 +13,8 @@ use std::time::Duration;
 use crate::sqlite::Connection;
 use crate::time::now_iso;
 
+// Kept from before the Agent Cloud rename: pruning and the restore test find
+// existing copies by this prefix.
 const PREFIX: &str = "almanac-";
 const SUFFIX: &str = ".db";
 
@@ -118,7 +120,7 @@ mod tests {
     use crate::util::{hex_encode, random_bytes};
 
     fn scratch() -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("almanac-bak-{}", hex_encode(&random_bytes(8))));
+        let dir = std::env::temp_dir().join(format!("agentcloud-bak-{}", hex_encode(&random_bytes(8))));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }

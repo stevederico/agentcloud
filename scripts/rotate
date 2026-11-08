@@ -10,11 +10,12 @@
 4. Commits with the new token. The old key and token stop working. With
    --feeds every subscribe URL changes too (re-subscribe Calendar.app).
 5. Saves the new key and moves the old one to `previousKeys`, which
-   `almanac open` and `open-file` still try, for older backups and exports.
+   `agentcloud open` and `open-file` still try, for older backups and exports.
 
 Run it again after a failure: it picks up `pendingKey`.
 
-ALMANAC_BASE, ALMANAC_CREDS, and ALMANAC_BIN match scripts/pull-export.
+AGENTCLOUD_BASE, AGENTCLOUD_CREDS, and AGENTCLOUD_BIN match scripts/pull-export
+(the old ALMANAC_* names still work).
 Keys and tokens are never printed.
 """
 import hashlib
@@ -38,24 +39,46 @@ def fail(message):
     sys.exit(1)
 
 
-def almanac_bin():
-    chosen = os.environ.get("ALMANAC_BIN", "").strip()
+
+def env(name, default=""):
+    """AGENTCLOUD_<name>, else the old ALMANAC_<name>, else default."""
+    for prefix in ("AGENTCLOUD_", "ALMANAC_"):
+        value = os.environ.get(prefix + name, "").strip()
+        if value:
+            return value
+    return default
+
+
+def creds_path():
+    chosen = env("CREDS")
+    if chosen:
+        return pathlib.Path(chosen).expanduser()
+    new = pathlib.Path("~/.config/agentcloud/hosted-calendars.json").expanduser()
+    if new.exists():
+        return new
+    return pathlib.Path("~/.config/almanac/hosted-calendars.json").expanduser()
+
+
+def agentcloud_bin():
+    chosen = env("BIN")
     if chosen:
         return chosen
-    found = shutil.which("almanac")
-    if found:
-        return found
+    for name in ("agentcloud", "almanac"):
+        found = shutil.which(name)
+        if found:
+            return found
     root = pathlib.Path(__file__).resolve().parent.parent / "target"
-    for name in ("release", "debug"):
-        built = root / name / "almanac"
-        if built.is_file() and os.access(built, os.X_OK):
-            return str(built)
-    fail("needs the almanac binary")
+    for profile in ("release", "debug"):
+        for name in ("agentcloud", "almanac"):
+            built = root / profile / name
+            if built.is_file() and os.access(built, os.X_OK):
+                return str(built)
+    return ""
 
 
 def request(base, token, method, path, payload=None, ok=(200, 201, 204), extra=None):
     data = None if payload is None else json.dumps(payload).encode()
-    headers = {"Authorization": f"Bearer {token}", "User-Agent": "almanac-rotate/1", **(extra or {})}
+    headers = {"Authorization": f"Bearer {token}", "User-Agent": "agentcloud-rotate/1", **(extra or {})}
     if data is not None:
         headers["Content-Type"] = "application/json"
     req = urllib.request.Request(f"{base}{path}", data=data, headers=headers, method=method)
@@ -79,16 +102,16 @@ def request(base, token, method, path, payload=None, ok=(200, 201, 204), extra=N
 
 
 def run(binary, args, stdin, creds):
-    env = dict(os.environ, ALMANAC_CREDS=str(creds))
+    env = dict(os.environ, AGENTCLOUD_CREDS=str(creds), ALMANAC_CREDS=str(creds))
     proc = subprocess.run([binary, *args], input=stdin, capture_output=True, env=env)
     if proc.returncode != 0:
-        fail(f"almanac {args[0]} failed")
+        fail(f"agentcloud {args[0]} failed")
     return proc.stdout
 
 
 def try_open(binary, cal_id, kind, uid, wire, creds):
     """The plaintext, or None when this key cannot open the seal."""
-    env = dict(os.environ, ALMANAC_CREDS=str(creds))
+    env = dict(os.environ, AGENTCLOUD_CREDS=str(creds), ALMANAC_CREDS=str(creds))
     proc = subprocess.run(
         [binary, "open", "--cal", cal_id, "--kind", kind, "--uid", uid],
         input=wire.encode(), capture_output=True, env=env,
@@ -128,7 +151,9 @@ def reseal_pass(base, token, info, binary, cal_id, creds, new_creds, since):
 
 
 def write_creds(path, rows):
-    """Atomic, mode 600, in the same directory."""
+    """Atomic, mode 600, in the same directory. A symlinked path (an old
+    config path left pointing at the new one) is followed, so the link stays."""
+    path = path.resolve()
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".creds-")
     try:
         os.fchmod(fd, 0o600)
@@ -148,10 +173,8 @@ def main():
     if len(args) != 1 or not args[0].strip():
         fail("name the calendar: scripts/rotate cal_... [--feeds]")
     cal_id = args[0].strip()
-    base = os.environ.get("ALMANAC_BASE", "https://almanac.dottie.ai").rstrip("/")
-    creds = pathlib.Path(
-        os.environ.get("ALMANAC_CREDS", "~/.config/almanac/hosted-calendars.json")
-    ).expanduser()
+    base = env("BASE", "https://cloud.bixbyapps.com").rstrip("/")
+    creds = creds_path()
     try:
         rows = json.loads(creds.read_text())
     except (OSError, ValueError):
@@ -163,14 +186,14 @@ def main():
     if not entry or not entry.get("key"):
         fail("that calendar is not in the credentials file")
 
-    binary = almanac_bin()
+    binary = (agentcloud_bin() or fail("needs the agentcloud binary"))
     old_key = entry["key"]
     if not entry.get("pendingKey"):
         entry["pendingKey"] = secrets.token_hex(24)
         write_creds(creds, rows[0] if single else rows)
     new_key = entry["pendingKey"]
 
-    with tempfile.TemporaryDirectory(prefix="almanac-rotate-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="agentcloud-rotate-") as tmp:
         os.chmod(tmp, 0o700)
         new_creds = pathlib.Path(tmp) / "new.json"
         new_creds.write_text(json.dumps([{"id": cal_id, "key": new_key}]))

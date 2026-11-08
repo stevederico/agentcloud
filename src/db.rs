@@ -340,8 +340,8 @@ impl Db {
         agent_key: Option<&str>,
         feed_mode: &str,
     ) -> Result<(CalendarRow, String), String> {
-        let name = name.unwrap_or("Almanac").trim();
-        let name = if name.is_empty() { "Almanac" } else { name };
+        let name = name.unwrap_or("Agent Cloud").trim();
+        let name = if name.is_empty() { "Agent Cloud" } else { name };
         if name.len() > 80 {
             return Err("name is too long".into());
         }
@@ -386,8 +386,8 @@ impl Db {
         if !is_sha256_hex(auth_hash) {
             return Err("auth_hash must be 64 lowercase hex characters".into());
         }
-        let name = name.unwrap_or("Almanac").trim();
-        let name = if name.is_empty() { "Almanac" } else { name };
+        let name = name.unwrap_or("Agent Cloud").trim();
+        let name = if name.is_empty() { "Agent Cloud" } else { name };
         if name.len() > 80 {
             return Err("name is too long".into());
         }
@@ -1916,7 +1916,7 @@ mod tests {
     use crate::util::hex_encode;
 
     fn tmp_db() -> (Db, String) {
-        let dir = std::env::temp_dir().join(format!("almanac-db-{}", hex_encode(&random_bytes(8))));
+        let dir = std::env::temp_dir().join(format!("agentcloud-db-{}", hex_encode(&random_bytes(8))));
         std::fs::create_dir_all(&dir).unwrap();
         let db = Db::open(dir.join("calendar.db")).unwrap();
         let (cal, _) = db.create_calendar(Some("Test"), None, None, None, "plain").unwrap();
@@ -2196,7 +2196,7 @@ mod tests {
     // ---- migration ---------------------------------------------------------
 
     fn scratch_path() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("almanac-mig-{}", hex_encode(&random_bytes(8))));
+        let dir = std::env::temp_dir().join(format!("agentcloud-mig-{}", hex_encode(&random_bytes(8))));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("calendar.db")
     }
@@ -2420,7 +2420,7 @@ mod tests {
     const NOTE_BODY: &str = "note-body-plaintext-sentinel-9f3a";
 
     fn enc_path() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("almanac-enc-{}", hex_encode(&random_bytes(8))));
+        let dir = std::env::temp_dir().join(format!("agentcloud-enc-{}", hex_encode(&random_bytes(8))));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("calendar.db")
     }

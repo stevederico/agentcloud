@@ -7,19 +7,19 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use almanac::backup::{spawn as spawn_backups, BackupConfig};
-use almanac::db::Db;
-use almanac::env::{load_env_file, read_config_from_os};
-use almanac::http::{json_response, read_request_with, write_response, ReadError};
-use almanac::json::{stringify, Value};
-use almanac::server::{handle, AppState};
-use almanac::time::now_iso;
+use agentcloud::backup::{spawn as spawn_backups, BackupConfig};
+use agentcloud::db::Db;
+use agentcloud::env::{load_env_file, read_config_from_os};
+use agentcloud::http::{json_response, read_request_with, write_response, ReadError};
+use agentcloud::json::{stringify, Value};
+use agentcloud::server::{handle, AppState};
+use agentcloud::time::now_iso;
 
 /// Empty the trash of items deleted more than `TRASH_DAYS` ago, at boot and
 /// every 6 hours.
 fn spawn_trash_purge(db: Arc<std::sync::Mutex<Db>>) {
     std::thread::spawn(move || loop {
-        let cutoff = almanac::time::days_ago_iso(almanac::sync::TRASH_DAYS);
+        let cutoff = agentcloud::time::days_ago_iso(agentcloud::sync::TRASH_DAYS);
         let result = match db.lock() {
             Ok(db) => db.purge_trash(&cutoff),
             Err(poisoned) => poisoned.into_inner().purge_trash(&cutoff),
@@ -37,7 +37,7 @@ fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(cmd) = args.first() {
         if matches!(cmd.as_str(), "seal" | "open" | "auth-token" | "seal-file" | "open-file") {
-            match almanac::seal::run(cmd, &args[1..]) {
+            match agentcloud::seal::run(cmd, &args[1..]) {
                 Ok(out) => {
                     if !out.is_empty() {
                         println!("{out}");
@@ -52,12 +52,12 @@ fn main() {
         }
     }
     if args.first().map(String::as_str) == Some("stats") {
-        // `almanac stats --db PATH`: row counts of a (possibly encrypted)
+        // `agentcloud stats --db PATH`: row counts of a (possibly encrypted)
         // database, for the restore test. `DB_KEY` from the environment.
         let path = match args.get(1..3) {
             Some([flag, path]) if flag == "--db" => path.clone(),
             _ => {
-                eprintln!("usage: almanac stats --db PATH");
+                eprintln!("usage: agentcloud stats --db PATH");
                 std::process::exit(2);
             }
         };
@@ -244,7 +244,7 @@ fn accept_loop(listener: TcpListener, state: AppState) {
         let taken = live.fetch_add(1, Ordering::SeqCst) + 1;
         if taken > MAX_CONNECTIONS {
             live.fetch_sub(1, Ordering::SeqCst);
-            eprintln!("almanac: refusing connection, {MAX_CONNECTIONS} already in flight");
+            eprintln!("agentcloud: refusing connection, {MAX_CONNECTIONS} already in flight");
             drop(stream);
             continue;
         }
@@ -260,7 +260,7 @@ fn accept_loop(listener: TcpListener, state: AppState) {
 
 fn serve(stream: TcpStream, state: &AppState) {
     if let Err(e) = stream.set_write_timeout(Some(WRITE_TIMEOUT)) {
-        eprintln!("almanac: set_write_timeout failed: {e}");
+        eprintln!("agentcloud: set_write_timeout failed: {e}");
         return;
     }
     let peer = stream
@@ -271,7 +271,7 @@ fn serve(stream: TcpStream, state: &AppState) {
     // Was `.expect("clone")`, which panicked the worker on fd exhaustion --
     // exactly the state a connection flood reaches.
     let Ok(read_half) = stream.try_clone() else {
-        eprintln!("almanac: could not clone stream, dropping connection");
+        eprintln!("agentcloud: could not clone stream, dropping connection");
         return;
     };
 
@@ -289,18 +289,18 @@ fn serve(stream: TcpStream, state: &AppState) {
             // with no reply. The DB lock recovers from poisoning, so the next
             // request is fine.
             catch_unwind(AssertUnwindSafe(|| handle(state, &req))).unwrap_or_else(|_| {
-                eprintln!("almanac: handler panicked: {} {}", req.method, req.path);
+                eprintln!("agentcloud: handler panicked: {} {}", req.method, req.path);
                 json_response(500, r#"{"error":"internal error"}"#)
             })
         }
         Err(ReadError::Reject(status, msg)) => {
-            eprintln!("almanac: rejecting request from {peer}: {status} {msg}");
+            eprintln!("agentcloud: rejecting request from {peer}: {status} {msg}");
             json_response(status, &format!(r#"{{"error":"{msg}"}}"#))
         }
         Err(ReadError::Closed(why)) => {
             // Nothing logged this before: a stalled connection produced no
             // output at all, so a flood looked like a silent, idle server.
-            eprintln!("almanac: dropping connection from {peer}: {why}");
+            eprintln!("agentcloud: dropping connection from {peer}: {why}");
             return;
         }
     };

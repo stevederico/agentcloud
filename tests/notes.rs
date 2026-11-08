@@ -2,8 +2,8 @@
 
 mod common;
 
-use almanac::http::Request;
-use almanac::json::Value;
+use agentcloud::http::Request;
+use agentcloud::json::Value;
 use common::*;
 
 fn titles(v: &Value) -> Vec<String> {
@@ -172,7 +172,7 @@ fn search_matches_title_or_body_and_treats_wildcards_and_quotes_literally() {
         ("Quote", "it's fine"),
         ("Path", r"c:\dir"),
     ] {
-        let body = format!(r#"{{"title":"{title}","body":{}}}"#, almanac::json::stringify(&Value::String(body.into())));
+        let body = format!(r#"{{"title":"{title}","body":{}}}"#, agentcloud::json::stringify(&Value::String(body.into())));
         assert_eq!(call(&app, &cal.key, "POST", &coll, Some(&body)).0, 201);
     }
     let find = |q: &str| {

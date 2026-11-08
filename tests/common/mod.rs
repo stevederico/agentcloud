@@ -2,18 +2,18 @@
 //! goes through `handle()`, and a way to make a calendar and call it.
 #![allow(dead_code)]
 
-use almanac::db::Db;
-use almanac::http::{Request, Response};
-use almanac::json::{parse, Value};
-use almanac::server::{handle, AppState};
-use almanac::util::{hex_encode, random_bytes};
+use agentcloud::db::Db;
+use agentcloud::http::{Request, Response};
+use agentcloud::json::{parse, Value};
+use agentcloud::server::{handle, AppState};
+use agentcloud::util::{hex_encode, random_bytes};
 
 pub const HOME_KEY: &str = "home-secret";
 pub const HOME_FEED: &str = "home-feed";
 pub const BASE: &str = "http://example.test";
 
 pub fn app() -> AppState {
-    let dir = std::env::temp_dir().join(format!("almanac-it-{}", hex_encode(&random_bytes(8))));
+    let dir = std::env::temp_dir().join(format!("agentcloud-it-{}", hex_encode(&random_bytes(8))));
     std::fs::create_dir_all(&dir).unwrap();
     let db = Db::open(dir.join("calendar.db")).unwrap();
     db.ensure_home_calendar(HOME_FEED, HOME_KEY, "Home").unwrap();

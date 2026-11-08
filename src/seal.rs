@@ -252,7 +252,7 @@ pub fn seal_file(write_key: &str, calendar_id: &str, plaintext: &[u8]) -> Result
 }
 
 pub fn open_file(write_key: &str, calendar_id: &str, sealed: &[u8]) -> Result<Vec<u8>, String> {
-    let packed = sealed.strip_prefix(FILE_MAGIC).ok_or("not a sealed almanac file")?;
+    let packed = sealed.strip_prefix(FILE_MAGIC).ok_or("not a sealed Agent Cloud file")?;
     gcm_open(&derive(write_key), &aad(calendar_id, "file", ""), packed)
         .map_err(|_| "file was rejected (wrong calendar key or damaged)".to_string())
 }
@@ -397,9 +397,9 @@ fn base64url_decode(text: &str) -> Result<Vec<u8>, ()> {
     Ok(out)
 }
 
-const USAGE: &str = "usage: almanac seal|open [--cal ID] --kind event|todo|note --uid UID\n       almanac auth-token [--cal ID]\n       almanac seal-file|open-file [--cal ID] < in > out";
+const USAGE: &str = "usage: agentcloud seal|open [--cal ID] --kind event|todo|note --uid UID\n       agentcloud auth-token [--cal ID]\n       agentcloud seal-file|open-file [--cal ID] < in > out";
 
-/// `almanac seal|open|auth-token|seal-file|open-file`. The key is read from
+/// `agentcloud seal|open|auth-token|seal-file|open-file`. The key is read from
 /// the credentials file and never printed. `auth-token` prints the bearer
 /// derived from it, which logs in but cannot open a seal.
 pub fn run(cmd: &str, args: &[String]) -> Result<String, String> {
@@ -466,11 +466,25 @@ fn previous_keys(want: Option<&str>) -> Result<Vec<String>, String> {
         .collect())
 }
 
+/// The credentials file: `AGENTCLOUD_CREDS`, then `ALMANAC_CREDS`, then
+/// `~/.config/agentcloud/hosted-calendars.json` if it exists, else the old
+/// `~/.config/almanac/hosted-calendars.json`, so machines can move one at a time.
+pub fn creds_path() -> String {
+    for var in ["AGENTCLOUD_CREDS", "ALMANAC_CREDS"] {
+        if let Some(path) = std::env::var(var).ok().filter(|p| !p.trim().is_empty()) {
+            return path;
+        }
+    }
+    let home = std::env::var("HOME").unwrap_or_default();
+    let new = format!("{home}/.config/agentcloud/hosted-calendars.json");
+    if std::path::Path::new(&new).exists() {
+        return new;
+    }
+    format!("{home}/.config/almanac/hosted-calendars.json")
+}
+
 fn load_row(want: Option<&str>) -> Result<Value, String> {
-    let path = std::env::var("ALMANAC_CREDS").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{home}/.config/almanac/hosted-calendars.json")
-    });
+    let path = creds_path();
     let text = std::fs::read_to_string(&path).map_err(|_| "could not read the calendar key".to_string())?;
     let value = crate::json::parse(&text).map_err(|_| "could not read the calendar key".to_string())?;
     let row = match &value {
@@ -485,10 +499,7 @@ fn load_row(want: Option<&str>) -> Result<Value, String> {
 }
 
 fn load_key(want: Option<&str>) -> Result<(String, String), String> {
-    let path = std::env::var("ALMANAC_CREDS").unwrap_or_else(|_| {
-        let home = std::env::var("HOME").unwrap_or_default();
-        format!("{home}/.config/almanac/hosted-calendars.json")
-    });
+    let path = creds_path();
     let text = std::fs::read_to_string(&path).map_err(|_| "could not read the calendar key".to_string())?;
     let value = crate::json::parse(&text).map_err(|_| "could not read the calendar key".to_string())?;
     let rows = match &value {

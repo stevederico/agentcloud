@@ -1,0 +1,6 @@
+[Unit]
+Description=Pull an Agent Cloud export
+
+[Service]
+Type=oneshot
+ExecStart=%h/Projects/agentcloud/scripts/pull-export

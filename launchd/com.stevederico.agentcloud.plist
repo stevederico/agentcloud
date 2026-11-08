@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Template only. `almanac start` rewrites ~/Library/LaunchAgents from this shape. -->
+<!-- Template only. `agentcloud start` rewrites ~/Library/LaunchAgents from this shape. -->
 <plist version="1.0">
 <dict>
 	<key>Label</key>
-	<string>com.stevederico.almanac</string>
+	<string>com.stevederico.agentcloud</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>$HOME/.local/share/almanac/almanac</string>
+		<string>$HOME/.local/share/agentcloud/agentcloud</string>
 	</array>
 	<key>WorkingDirectory</key>
-	<string>$HOME/.local/share/almanac</string>
+	<string>$HOME/.local/share/agentcloud</string>
 	<key>EnvironmentVariables</key>
 	<dict>
 		<key>PATH</key>
@@ -23,8 +23,8 @@
 	<key>KeepAlive</key>
 	<true/>
 	<key>StandardOutPath</key>
-	<string>$HOME/Library/Logs/almanac.out</string>
+	<string>$HOME/Library/Logs/agentcloud.out</string>
 	<key>StandardErrorPath</key>
-	<string>$HOME/Library/Logs/almanac.err</string>
+	<string>$HOME/Library/Logs/agentcloud.err</string>
 </dict>
 </plist>

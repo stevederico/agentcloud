@@ -1,4 +1,4 @@
-# almanac
+# agentcloud
 
 Agent-first ICS calendar. Request a calendar. Subscribe the URL. Write events.
 
@@ -7,7 +7,7 @@ Agent-first ICS calendar. Request a calendar. Subscribe the URL. Write events.
 Prod answers `403` to an empty or default-curl User-Agent. Add `-A "Mozilla/5.0 my-agent"` to every `curl` below.
 
 ```bash
-curl -sS -X POST https://almanac.dottie.ai/calendars \
+curl -sS -X POST https://cloud.bixbyapps.com/calendars \
   -H "Content-Type: application/json" \
   -d '{"name":"Roadmap"}'
 ```
@@ -18,8 +18,8 @@ Success `201`:
 {
   "id": "cal_ab12cd34ef56ab78",
   "name": "Roadmap",
-  "subscribe": "https://almanac.dottie.ai/feed/….ics",
-  "write": "https://almanac.dottie.ai/v1/c/cal_ab12cd34ef56ab78/events",
+  "subscribe": "https://cloud.bixbyapps.com/feed/….ics",
+  "write": "https://cloud.bixbyapps.com/v1/c/cal_ab12cd34ef56ab78/events",
   "key": "…",
   "createdAt": "2026-08-13T20:00:00.000Z"
 }
@@ -37,7 +37,7 @@ TOKEN=$(printf '%s' "${KEY}almanac-auth-v1" | sha256sum | cut -d' ' -f1)   # or:
 
 The token logs in but cannot open a seal (the seal key is `sha256(KEY + "almanac-seal-v1")`), so a client that only sends the token keeps every seal away from the server. Below, `$KEY` in `Authorization` means this token.
 
-The raw key still works while `GET /v1/c/{id}` shows `"legacyAuth": true` (calendars from before 0.30.0, or created without `auth_hash`). The first raw-key login records the token. `POST /v1/c/{id}` (or `PATCH`) with `{"legacy_auth": false}` turns the raw key off for good. Cloudflare in front of almanac.dottie.ai answers `403` to `PATCH`: use `POST /v1/c/{id}` for calendar settings and `PUT` for items (it keeps fields you leave out).
+The raw key still works while `GET /v1/c/{id}` shows `"legacyAuth": true` (calendars from before 0.30.0, or created without `auth_hash`). The first raw-key login records the token. `POST /v1/c/{id}` (or `PATCH`) with `{"legacy_auth": false}` turns the raw key off for good. Cloudflare in front of the host answers `403` to `PATCH`: use `POST /v1/c/{id}` for calendar settings and `PUT` for items (it keeps fields you leave out).
 
 Create without ever sending a key: `POST /calendars` with `{"name":"…","auth_hash":"<sha256hex(TOKEN)>"}`. The response has no `key`; the one you made is the only copy.
 
@@ -157,7 +157,7 @@ New calendars default to `feed: "seal"`. Each event, todo, and note is one `alm1
 
 `feed: "plain"` is today's field API and a readable ICS, VTODO, or Atom feed. `PATCH /v1/c/{id}` with `{"feed":"seal"}` or `{"feed":"plain"}` sets the mode. Existing rows stay as they are until a client that has the key rewrites them. `scripts/reseal` does that for one calendar id passed on the command line.
 
-`almanac seal` and `almanac open` read the key from `~/.config/almanac/hosted-calendars.json` and do not print it. `open` also tries `previousKeys` (kept by `scripts/rotate`). `almanac auth-token` prints the token. `almanac seal-file` / `open-file` seal a whole file (stdin to stdout) for the calendar; `scripts/pull-export` stores its exports that way.
+`agentcloud seal` and `agentcloud open` read the key from `AGENTCLOUD_CREDS` (or the old `ALMANAC_CREDS`), else `~/.config/agentcloud/hosted-calendars.json`, else the old `~/.config/almanac/hosted-calendars.json`, and do not print it. `open` also tries `previousKeys` (kept by `scripts/rotate`). `agentcloud auth-token` prints the token. `agentcloud seal-file` / `open-file` seal a whole file (stdin to stdout) for the calendar; `scripts/pull-export` stores its exports that way.
 
 ## Todos
 
@@ -218,8 +218,8 @@ Notes feed: `notes.subscribe`. Atom, newest 200 notes, no bearer, its own token.
 ## Export
 
 ```bash
-curl -sS "$BASE/v1/c/$ID/export" -H "Authorization: Bearer $KEY" > almanac.json
-curl -sS "$BASE/v1/c/$ID/export?format=md" -H "Authorization: Bearer $KEY" > almanac.md
+curl -sS "$BASE/v1/c/$ID/export" -H "Authorization: Bearer $KEY" > agentcloud.json
+curl -sS "$BASE/v1/c/$ID/export?format=md" -H "Authorization: Bearer $KEY" > agentcloud.md
 ```
 
 Everything in the calendar: events, todos, notes with bodies. No feed tokens or keys. `format` is `json` (default) or `md`. 10 exports per hour per calendar (`429`).
@@ -228,9 +228,9 @@ Subscribe: paste `subscribe` in Calendar → File → New Calendar Subscription.
 
 Machine docs: `GET /llms.txt`. Humans: `GET /`.
 
-Agent skill: `skills/almanac/SKILL.md`. It ships with the API so the two change together. Install by linking it: `ln -sfn "$PWD/skills/almanac" ~/.agents/skills/almanac`. It reads the default calendar and key from `~/.config/almanac/hosted-calendars.json`, so it holds no secret and no calendar id. `tests/skill.rs` enforces that.
+Agent skill: `skills/agentcloud/SKILL.md`. It ships with the API so the two change together. Install by linking it: `ln -sfn "$PWD/skills/agentcloud" ~/.agents/skills/agentcloud`. It reads the default calendar and key from `~/.config/agentcloud/hosted-calendars.json`, so it holds no secret and no calendar id. `tests/skill.rs` enforces that.
 
-Secrets stay out of the repo. Enable the commit hook once per clone: `git config core.hooksPath scripts/hooks`. It blocks a commit or a commit message that holds a 48-character hex string (the size of a key or feed token) or any credential from `~/.config/almanac/hosted-calendars.json`, and never prints what it found. `tests/secrets.rs` runs the same checks over every tracked file and confirms `.env`, `*.db`, backups and the credentials file are git-ignored.
+Secrets stay out of the repo. Enable the commit hook once per clone: `git config core.hooksPath scripts/hooks`. It blocks a commit or a commit message that holds a 48-character hex string (the size of a key or feed token) or any credential from `~/.config/agentcloud/hosted-calendars.json`, and never prints what it found. `tests/secrets.rs` runs the same checks over every tracked file and confirms `.env`, `*.db`, backups and the credentials file are git-ignored.
 
 ## Errors
 

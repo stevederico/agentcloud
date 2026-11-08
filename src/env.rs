@@ -90,7 +90,7 @@ pub fn read_config(env: &HashMap<String, String>) -> Config {
         .get("CAL_NAME")
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "Almanac".to_string());
+        .unwrap_or_else(|| "Agent Cloud".to_string());
     Config {
         port,
         host,
@@ -144,7 +144,7 @@ mod tests {
         let cfg = read_config(&HashMap::new());
         assert_eq!(cfg.port, 18788);
         assert_eq!(cfg.host, "localhost");
-        assert_eq!(cfg.cal_name, "Almanac");
+        assert_eq!(cfg.cal_name, "Agent Cloud");
         assert_eq!(cfg.tls_key, "");
         assert_eq!(cfg.tls_cert, "");
         assert_eq!(cfg.db_key, "");
@@ -177,7 +177,7 @@ mod tests {
     fn load_env_file_cases() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let dir = std::env::temp_dir().join(format!(
-            "almanac-env-{}",
+            "agentcloud-env-{}",
             crate::util::hex_encode(&crate::util::random_bytes(8))
         ));
         fs::create_dir_all(&dir).unwrap();

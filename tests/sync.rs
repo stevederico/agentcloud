@@ -2,8 +2,8 @@
 
 mod common;
 
-use almanac::http::Request;
-use almanac::json::Value;
+use agentcloud::http::Request;
+use agentcloud::json::Value;
 use common::*;
 
 fn rev_of(v: &Value) -> i64 {
@@ -22,7 +22,7 @@ fn uids(v: &Value, key: &str) -> Vec<String> {
         .collect()
 }
 
-fn put_note(app: &almanac::AppState, cal: &Cal, uid: &str, title: &str, if_match: Option<&str>) -> (u16, Value) {
+fn put_note(app: &agentcloud::AppState, cal: &Cal, uid: &str, title: &str, if_match: Option<&str>) -> (u16, Value) {
     let mut req = Request::new("PUT", &format!("/v1/c/{}/notes/{uid}", cal.id))
         .with_header("authorization", &format!("Bearer {}", cal.key))
         .with_header("content-type", "application/json")

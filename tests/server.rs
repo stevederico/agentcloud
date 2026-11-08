@@ -1,24 +1,24 @@
 
 
-use almanac::db::Db;
-use almanac::http::Request;
-use almanac::json::{parse, Value};
-use almanac::server::{handle, AppState};
-use almanac::util::{hex_encode, random_bytes};
+use agentcloud::db::Db;
+use agentcloud::http::Request;
+use agentcloud::json::{parse, Value};
+use agentcloud::server::{handle, AppState};
+use agentcloud::util::{hex_encode, random_bytes};
 
 const FEED: &str = "feed-secret";
 const KEY: &str = "agent-secret";
 const BASE: &str = "http://example.test";
 
 fn test_app() -> AppState {
-    let dir = std::env::temp_dir().join(format!("almanac-srv-{}", hex_encode(&random_bytes(8))));
+    let dir = std::env::temp_dir().join(format!("agentcloud-srv-{}", hex_encode(&random_bytes(8))));
     std::fs::create_dir_all(&dir).unwrap();
     let db = Db::open(dir.join("calendar.db")).unwrap();
     db.ensure_home_calendar(FEED, KEY, "My Calendar").unwrap();
     AppState::new(db, BASE.into())
 }
 
-fn send(state: &AppState, req: Request) -> (u16, Vec<u8>, almanac::http::Response) {
+fn send(state: &AppState, req: Request) -> (u16, Vec<u8>, agentcloud::http::Response) {
     let res = handle(state, &req);
     (res.status, res.body.clone(), res)
 }
@@ -783,7 +783,7 @@ fn form_names_with_stray_percent_signs_do_not_panic() {
 
 // ---- limits ----------------------------------------------------------------
 
-fn create(app: &AppState, xff: Option<&str>) -> (u16, almanac::http::Response) {
+fn create(app: &AppState, xff: Option<&str>) -> (u16, agentcloud::http::Response) {
     let mut req = Request::new("POST", "/calendars")
         .with_header("content-type", "application/json")
         .with_header("accept", "application/json")
@@ -1119,7 +1119,7 @@ fn the_key_is_shown_at_creation_and_never_again() {
 
 #[test]
 fn a_row_with_no_hash_never_authenticates() {
-    let dir = std::env::temp_dir().join(format!("almanac-nohash-{}", hex_encode(&random_bytes(8))));
+    let dir = std::env::temp_dir().join(format!("agentcloud-nohash-{}", hex_encode(&random_bytes(8))));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("calendar.db");
     let db = Db::open(&path).unwrap();
@@ -1127,7 +1127,7 @@ fn a_row_with_no_hash_never_authenticates() {
     let app = AppState::new(db, BASE.into());
     let (id, _) = create_json(&app);
 
-    let conn = almanac::sqlite::Connection::open(&path).unwrap();
+    let conn = agentcloud::sqlite::Connection::open(&path).unwrap();
     conn.execute_batch("UPDATE calendars SET key_hash = ''").unwrap();
 
     for header in [None, Some(""), Some("Bearer "), Some("Bearer x")] {
@@ -1188,7 +1188,7 @@ fn a_sealed_calendar_hides_events_todos_and_notes_from_the_feeds() {
 
     let sentinel = "note-body-plaintext-sentinel-9f3a";
     let put = |path: &str, kind: &str, uid: &str, plain: &str| {
-        let wire = almanac::seal::seal(key, id, kind, uid, plain.as_bytes()).unwrap();
+        let wire = agentcloud::seal::seal(key, id, kind, uid, plain.as_bytes()).unwrap();
         assert!(!wire.contains(sentinel));
         let body = format!(r#"{{"seal":"{wire}"}}"#);
         let (status, raw, _) = send(

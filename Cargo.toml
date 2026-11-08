@@ -1,8 +1,8 @@
 [package]
-name = "almanac"
-version = "0.37.0"
+name = "agentcloud"
+version = "0.38.0"
 edition = "2021"
-description = "Almanac: ICS feed agents write; Apple Calendar subscribes"
+description = "Agent Cloud: calendar, todos and notes agents write; Apple Calendar subscribes"
 license = "MIT"
 
 # Zero crates. HTTP/JSON/dates are std. SQLite is the system lib.

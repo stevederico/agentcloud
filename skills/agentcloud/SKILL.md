@@ -1,26 +1,28 @@
 ---
-name: almanac
+name: agentcloud
 description: >
   Hosted agent-first calendar, todos and notes on one key. Use when creating a
   calendar, adding or moving an event, adding or finishing a todo, saving or
-  searching a note, exporting or backing up, or when he says almanac, "put
+  searching a note, exporting or backing up, or when he says agent cloud,
+  almanac (the old name), "put
   this on my calendar", "add an event", "add a todo", "remind me", "save a
   note", or "back up my calendar".
 ---
 
-# almanac
+# agentcloud
 
-A default calendar already exists. Events, todos and notes all live on it and one key writes all three. Do not `POST /calendars` unless asked to create another, and do not delete a calendar unless asked.
+Agent Cloud, formerly Almanac. A default calendar already exists. Events, todos and notes all live on it and one key writes all three. Do not `POST /calendars` unless asked to create another, and do not delete a calendar unless asked.
 
 ```bash
-BASE=https://almanac.dottie.ai
-CREDS=$HOME/.config/almanac/hosted-calendars.json
+BASE=https://cloud.bixbyapps.com
+CREDS=$HOME/.config/agentcloud/hosted-calendars.json
+[ -f "$CREDS" ] || CREDS=$HOME/.config/almanac/hosted-calendars.json
 ID=$(python3 -c "import json,sys;print(json.load(open(sys.argv[1]))[0]['id'])" "$CREDS")
 TOKEN=$(python3 -c "import hashlib,json,sys;k=json.load(open(sys.argv[1]))[0]['key'];print(hashlib.sha256((k+'almanac-auth-v1').encode()).hexdigest())" "$CREDS")
 AUTH="Authorization: Bearer $TOKEN"; J="Content-Type: application/json"
 ```
 
-The default calendar is the first entry of `~/.config/almanac/hosted-calendars.json` (a JSON list of `id`, `name`, `subscribe`, `write`, `key`, `createdAt`). Nothing about it is hardcoded here.
+The default calendar is the first entry of `~/.config/agentcloud/hosted-calendars.json` (the old `~/.config/almanac/` path until a machine has moved; a JSON list of `id`, `name`, `subscribe`, `write`, `key`, `createdAt`). Nothing about it is hardcoded here. `almanac.dottie.ai` is the old host of the same service: same keys, same feed URLs.
 
 Send `$TOKEN`, never the key: the token logs in but cannot open a seal, so the key never reaches the server. Never print, log or paste the key or `$TOKEN`. A key is shown once, when its calendar is created, and the server keeps only a hash, so that file is the only copy. Test by status code only. A `401` with the token on a calendar from before 0.30.0 clears after one request that sends the key itself (every Dottie app does that on sign-in).
 
@@ -33,7 +35,7 @@ Every request needs a `User-Agent`. `-A "Claude-Agent"` works. An empty or defau
 On a `seal` calendar, seal before every write and open after every read, for events, todos, and notes. The server stores ciphertext and cannot search or merge fields inside it. Fetch the list with no `q`, `tag`, or `status`, open each seal, then filter locally.
 
 ```bash
-BIN="$HOME/Projects/almanac/target/release/almanac"
+BIN=$(command -v agentcloud || echo "$HOME/Projects/agentcloud/target/release/agentcloud")
 printf '%s' "$JSON" | "$BIN" seal --cal "$ID" --kind event --uid "$UID" | {
   read -r SEAL
   curl -sS -A "Claude-Agent" -X PUT "$BASE/v1/c/$ID/events/$UID" -H "$AUTH" -H "$J" \
@@ -93,18 +95,18 @@ curl -sS -A "Claude-Agent" "$BASE/v1/c/$ID/notes?q=ideas&tag=work" -H "$AUTH"
 
 `GET $BASE/v1/c/$ID/export?format=json|md` returns everything (events, todos, notes with bodies) with no secrets. 10 per hour.
 
-Back up: run `~/Projects/almanac/scripts/pull-export`. It saves a sealed copy of the export in `~/.local/share/almanac-backups` (keeps the newest 30) and prints one line with the counts. Use it when asked to back up, and before anything risky. Read one with `almanac open-file < file.alm`; never paste its contents: it holds his notes. It reads the key itself.
+Back up: run `~/Projects/agentcloud/scripts/pull-export`. It saves a sealed copy of the export in `~/.local/share/almanac-backups` (keeps the newest 30) and prints one line with the counts. Use it when asked to back up, and before anything risky. Read one with `"$BIN" open-file < file.alm`; never paste its contents: it holds his notes. It reads the key itself.
 
-Rotate the key (only if asked, or after a leak): `~/Projects/almanac/scripts/rotate <id> --feeds`. The new key is made locally and saved to the credentials file; `--feeds` also changes the subscribe URLs, so Calendar.app must be re-subscribed. Scheduling it (a systemd timer, see `docs/DEPLOY.md`) is his call: do not install it unless asked.
+Rotate the key (only if asked, or after a leak): `~/Projects/agentcloud/scripts/rotate <id> --feeds`. The new key is made locally and saved to the credentials file; `--feeds` also changes the subscribe URLs, so Calendar.app must be re-subscribed. Scheduling it (a systemd timer, see `docs/DEPLOY.md`) is his call: do not install it unless asked.
 
 `GET $BASE/v1/c/$ID` lists the calendar's feed URLs (events, todos, notes). Those URLs carry read tokens: give them out only when asked. The events feed is already subscribed in Calendar.app. The todos (VTODO `.ics`) and notes (Atom) feeds are not subscribed anywhere yet.
 
 ## Other
 
-Create (only if asked): `POST $BASE/calendars` with `{"name":"Optional Title"}`. The response is the only time the `key` is shown. Store `id` and `key` in `~/.config/almanac/hosted-calendars.json` at once, mode 600, never in a synced folder.
+Create (only if asked): `POST $BASE/calendars` with `{"name":"Optional Title"}`. The response is the only time the `key` is shown. Store `id` and `key` in `$CREDS` at once, mode 600, never in a synced folder.
 
 Delete (only if asked): `DELETE $BASE/v1/c/$ID` with the same token. `204` when it is gone, including its events, todos, notes and feeds. A missing id or a wrong key is `401`. The `home` calendar cannot be deleted.
 
-Old local home calendar (`AGENT_KEY` in `~/Projects/almanac/.env`, `PUT $BASE/v1/events/<uid>`) is not the default.
+Old local home calendar (`AGENT_KEY` in `~/Projects/agentcloud/.env`, `PUT $BASE/v1/events/<uid>`) is not the default.
 
 Docs: `$BASE/llms.txt`. Do not use webcal://.

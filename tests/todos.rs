@@ -2,8 +2,8 @@
 
 mod common;
 
-use almanac::http::Request;
-use almanac::json::Value;
+use agentcloud::http::Request;
+use agentcloud::json::Value;
 use common::*;
 
 fn titles(v: &Value) -> Vec<String> {

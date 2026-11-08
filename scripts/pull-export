@@ -6,22 +6,25 @@ This is the backup that does not depend on the server: the export holds every
 event, todo and note (with bodies), so it is enough to rebuild from. It carries
 no keys or feed tokens.
 
-The file is sealed with the calendar's own key (`almanac seal-file`, AES-256-GCM)
+The file is sealed with the calendar's own key (`agentcloud seal-file`, AES-256-GCM)
 before it is written, so a copy of the folder, a synced disk or a backup drive
 reveals nothing. Sealed items inside stay sealed. To read one:
 
-  almanac open-file < almanac-cal_...-20261108T000000Z.alm
+  agentcloud open-file < almanac-cal_...-20261108T000000Z.alm
 
 `open-file` also tries `previousKeys`, so exports from before a rotation open.
 
-Reads the calendar from ~/.config/almanac/hosted-calendars.json (first entry,
-like the skill) and logs in with its auth token. Never prints or logs either.
+Reads the calendar from ~/.config/agentcloud/hosted-calendars.json, else the
+old ~/.config/almanac/ (first entry, like the skill), and logs in with its auth
+token. Never prints or logs either.
 
-  ALMANAC_BASE         default https://almanac.dottie.ai
-  ALMANAC_CREDS        default ~/.config/almanac/hosted-calendars.json
-  ALMANAC_BACKUP_DIR   default ~/.local/share/almanac-backups
-  ALMANAC_BACKUP_KEEP  default 30
-  ALMANAC_BIN          the almanac binary (else PATH, else ./target)
+  AGENTCLOUD_BASE         default https://cloud.bixbyapps.com
+  AGENTCLOUD_CREDS        default ~/.config/agentcloud/hosted-calendars.json
+  AGENTCLOUD_BACKUP_DIR   default ~/.local/share/almanac-backups
+  AGENTCLOUD_BACKUP_KEEP  default 30
+  AGENTCLOUD_BIN          the agentcloud binary (else PATH, else ./target)
+Each also reads the old ALMANAC_* name. The backup folder and file names keep
+"almanac" so pruning still finds the copies made before the rename.
 
 Exit status is non-zero on any failure and nothing already saved is touched, so
 a scheduled run can be checked with `systemctl --user status` or a mail on
@@ -44,25 +47,47 @@ def fail(message):
     sys.exit(1)
 
 
-def almanac_bin():
-    chosen = os.environ.get("ALMANAC_BIN", "").strip()
+
+def env(name, default=""):
+    """AGENTCLOUD_<name>, else the old ALMANAC_<name>, else default."""
+    for prefix in ("AGENTCLOUD_", "ALMANAC_"):
+        value = os.environ.get(prefix + name, "").strip()
+        if value:
+            return value
+    return default
+
+
+def creds_path():
+    chosen = env("CREDS")
+    if chosen:
+        return pathlib.Path(chosen).expanduser()
+    new = pathlib.Path("~/.config/agentcloud/hosted-calendars.json").expanduser()
+    if new.exists():
+        return new
+    return pathlib.Path("~/.config/almanac/hosted-calendars.json").expanduser()
+
+
+def agentcloud_bin():
+    chosen = env("BIN")
     if chosen:
         return chosen
-    found = shutil.which("almanac")
-    if found:
-        return found
+    for name in ("agentcloud", "almanac"):
+        found = shutil.which(name)
+        if found:
+            return found
     root = pathlib.Path(__file__).resolve().parent.parent / "target"
-    for name in ("release", "debug"):
-        built = root / name / "almanac"
-        if built.is_file() and os.access(built, os.X_OK):
-            return str(built)
+    for profile in ("release", "debug"):
+        for name in ("agentcloud", "almanac"):
+            built = root / profile / name
+            if built.is_file() and os.access(built, os.X_OK):
+                return str(built)
     return ""
 
 
 def run(binary, args, stdin=b""):
     proc = subprocess.run([binary, *args], input=stdin, capture_output=True)
     if proc.returncode != 0:
-        fail(f"almanac {args[0]} failed")
+        fail(f"agentcloud {args[0]} failed")
     return proc.stdout
 
 
@@ -70,7 +95,7 @@ def fetch(url, token):
     request = urllib.request.Request(
         url,
         # A real User-Agent: the host answers 403 to an empty or default one.
-        headers={"Authorization": f"Bearer {token}", "User-Agent": "almanac-backup/1"},
+        headers={"Authorization": f"Bearer {token}", "User-Agent": "agentcloud-backup/1"},
     )
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
@@ -80,27 +105,23 @@ def fetch(url, token):
 
 
 def main():
-    base = os.environ.get("ALMANAC_BASE", "https://almanac.dottie.ai").rstrip("/")
-    creds = pathlib.Path(
-        os.environ.get("ALMANAC_CREDS", "~/.config/almanac/hosted-calendars.json")
-    ).expanduser()
-    dest = pathlib.Path(
-        os.environ.get("ALMANAC_BACKUP_DIR", "~/.local/share/almanac-backups")
-    ).expanduser()
+    base = env("BASE", "https://cloud.bixbyapps.com").rstrip("/")
+    creds = creds_path()
+    dest = pathlib.Path(env("BACKUP_DIR", "~/.local/share/almanac-backups")).expanduser()
     try:
-        keep = max(1, int(os.environ.get("ALMANAC_BACKUP_KEEP", "30")))
+        keep = max(1, int(env("BACKUP_KEEP", "30")))
     except ValueError:
-        fail("ALMANAC_BACKUP_KEEP must be a whole number")
+        fail("AGENTCLOUD_BACKUP_KEEP must be a whole number")
 
     try:
         entry = json.loads(creds.read_text())[0]
         cal_id, key = entry["id"], entry["key"]
     except (OSError, ValueError, IndexError, KeyError, TypeError):
         fail(f"could not read a calendar id and key from {creds}")
-    binary = almanac_bin()
+    binary = agentcloud_bin()
     if not binary:
-        fail("needs the almanac binary to seal the export")
-    os.environ.setdefault("ALMANAC_CREDS", str(creds))
+        fail("needs the agentcloud binary to seal the export")
+    os.environ["AGENTCLOUD_CREDS"] = os.environ["ALMANAC_CREDS"] = str(creds)
     token = run(binary, ["auth-token", "--cal", cal_id]).decode().strip()
 
     url = f"{base}/v1/c/{cal_id}/export?format=json"

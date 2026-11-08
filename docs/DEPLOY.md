@@ -1,6 +1,6 @@
 # Run
 
-Hosted prod is `https://almanac.dottie.ai`. To self-host, run the Dockerfile on any host with a persistent volume mounted at `/app/data`.
+Hosted prod is `https://cloud.bixbyapps.com` (also `https://almanac.dottie.ai`, the old host: same service, same feed URLs). The Docker image runs `/usr/local/bin/agentcloud` and keeps `/usr/local/bin/almanac` as a link to it. To self-host, run the Dockerfile on any host with a persistent volume mounted at `/app/data`.
 
 On Railway, `railway up` from this repo ships the current tree. Redeploying the existing build does not.
 
@@ -14,15 +14,15 @@ Optional loopback. The server binds `localhost` (`127.0.0.1` and `::1`). Other d
 2. Rust toolchain (`cargo`) on PATH, and system `libsqlcipher` (SQLCipher 4).
 3. `cargo run --release`. Health: `http://localhost:18788/health`.
 
-On macOS, `./bin/almanac start` builds the binary, copies it to `~/.local/share/almanac` (launchd cannot read Desktop), and bootstraps the LaunchAgent `com.stevederico.almanac`. `./bin/almanac url` prints the subscribe URL. Logs: `~/Library/Logs/almanac.out` and `almanac.err`. The script defaults `ALMANAC_ROOT` to `~/Desktop/projects/almanac`; set it when the checkout is somewhere else. It always binds `localhost`.
+On macOS, `./bin/agentcloud start` builds the binary, copies it to `~/.local/share/agentcloud` (launchd cannot read Desktop), and bootstraps the LaunchAgent `com.stevederico.agentcloud`. `./bin/agentcloud url` prints the subscribe URL. Logs: `~/Library/Logs/agentcloud.out` and `agentcloud.err`. The script defaults `AGENTCLOUD_ROOT` to `~/Desktop/projects/agentcloud`; set it when the checkout is somewhere else. It always binds `localhost`.
 
 ## Database encryption
 
 `DB_KEY` is the passphrase for the SQLite file (`openssl rand -hex 32`). It is not stored in the file. With it set, a stolen `calendar.db` or an on-volume backup does not show event text, todo titles, note bodies, names, or feed tokens. Unset, the file stays plaintext, which is how tests and an existing deploy behave until the key is set.
 
-The running process can still read the file, and so can anyone with the write key or a feed URL. Someone who also has `DB_KEY` can decrypt the file. `scripts/pull-export` seals each copy with the calendar's key (`almanac seal-file`), so its folder holds no plaintext.
+The running process can still read the file, and so can anyone with the write key or a feed URL. Someone who also has `DB_KEY` can decrypt the file. `scripts/pull-export` seals each copy with the calendar's key (`agentcloud seal-file`), so its folder holds no plaintext.
 
-`almanac stats --db PATH` prints row counts (calendars, events, todos, notes, trash) with `DB_KEY` from the environment. It runs migrations, so point it at a copy, as the restore test does.
+`agentcloud stats --db PATH` prints row counts (calendars, events, todos, notes, trash) with `DB_KEY` from the environment. It runs migrations, so point it at a copy, as the restore test does.
 
 On the next boot with `DB_KEY` set, a plaintext file is encrypted and the plaintext copy is deleted. A wrong key, or an encrypted file with no key, refuses to start and does not overwrite the file.
 
@@ -34,18 +34,18 @@ The service copies its own database every `BACKUP_INTERVAL_HOURS` (default 6) in
 
 Those copies live on the same volume as the database. They cover a bad deploy or a corrupted file, not losing the volume.
 
-Railway's own volume backups need the Pro plan, and Railway deletes them with the volume anyway, so they would not cover losing it either. What does survive is a copy on another machine. `scripts/pull-export` fetches `GET /v1/c/{id}/export` (every event, todo and note body, no keys) into `~/.local/share/almanac-backups` (mode 700, files 600) and keeps the newest 30. It reads the key from `~/.config/almanac/hosted-calendars.json`, logs in with the auth token, and never prints either. Each copy is sealed (`.alm`); read one with `almanac open-file < almanac-cal_….alm`. Run it by hand, or once a day with the systemd user timer:
+Railway's own volume backups need the Pro plan, and Railway deletes them with the volume anyway, so they would not cover losing it either. What does survive is a copy on another machine. `scripts/pull-export` fetches `GET /v1/c/{id}/export` (every event, todo and note body, no keys) into `~/.local/share/almanac-backups` (mode 700, files 600) and keeps the newest 30. It reads the key from `~/.config/agentcloud/hosted-calendars.json`, logs in with the auth token, and never prints either. Each copy is sealed (`.alm`); read one with `agentcloud open-file < almanac-cal_….alm`. Run it by hand, or once a day with the systemd user timer:
 
 ```bash
 mkdir -p ~/.config/systemd/user
-cp scripts/systemd/almanac-backup.* ~/.config/systemd/user/
+cp scripts/systemd/agentcloud-backup.* ~/.config/systemd/user/
 systemctl --user daemon-reload
-systemctl --user enable --now almanac-backup.timer
-systemctl --user list-timers almanac-backup     # next run
-journalctl --user -u almanac-backup -n 5        # last result
+systemctl --user enable --now agentcloud-backup.timer
+systemctl --user list-timers agentcloud-backup     # next run
+journalctl --user -u agentcloud-backup -n 5        # last result
 ```
 
-Set `ALMANAC_BACKUP_DIR` and `ALMANAC_BACKUP_KEEP` to change where and how many. Keep that folder out of anything synced or committed: it holds your notes.
+Set `AGENTCLOUD_BACKUP_DIR` and `AGENTCLOUD_BACKUP_KEEP` to change where and how many. Keep that folder out of anything synced or committed: it holds your notes.
 
 Before a migration that rewrites rows, the service copies the file to `<db>.pre-<version>` and never overwrites an earlier copy.
 

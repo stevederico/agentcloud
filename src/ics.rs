@@ -266,7 +266,7 @@ pub fn render_calendar(cal_name: &str, events: &[IcsEvent]) -> String {
     let mut lines: Vec<String> = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//Steve//almanac//EN",
+        "PRODID:-//Steve//agentcloud//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         name_line.as_str(),
@@ -367,7 +367,7 @@ pub fn render_todos(cal_name: &str, todos: &[IcsTodo]) -> String {
     let mut lines: Vec<String> = [
         "BEGIN:VCALENDAR",
         "VERSION:2.0",
-        "PRODID:-//Steve//almanac//EN",
+        "PRODID:-//Steve//agentcloud//EN",
         "CALSCALE:GREGORIAN",
         "METHOD:PUBLISH",
         name_line.as_str(),
@@ -406,7 +406,7 @@ mod tests {
         let ics = render_todos("Home", &[todo("Buy milk")]);
         assert_eq!(
             ics,
-            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Steve//almanac//EN\r\n\
+            "BEGIN:VCALENDAR\r\nVERSION:2.0\r\nPRODID:-//Steve//agentcloud//EN\r\n\
              CALSCALE:GREGORIAN\r\nMETHOD:PUBLISH\r\nX-WR-CALNAME:Home Todos\r\n\
              BEGIN:VTODO\r\nUID:todo-1\r\nDTSTAMP:20260902T113000Z\r\n\
              CREATED:20260901T100000Z\r\nLAST-MODIFIED:20260902T113000Z\r\nSEQUENCE:0\r\n\

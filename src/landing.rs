@@ -12,7 +12,7 @@ fn esc(value: &str) -> String {
 pub fn json_index(base: &str) -> Value {
     let origin = base.trim_end_matches('/');
     Value::object(&[
-        ("name", Value::String("Almanac".into())),
+        ("name", Value::String("Agent Cloud".into())),
         (
             "description",
             Value::String(
@@ -37,9 +37,10 @@ pub fn json_index(base: &str) -> Value {
 pub fn llms_txt(base: &str) -> String {
     let origin = base.trim_end_matches('/');
     [
-        "# Almanac",
+        "# Agent Cloud",
         "",
-        "Agent-first ICS calendar. Agents write events. Humans subscribe to the feed URL.",
+        "Agent-first calendar, todos and notes. Agents write. Humans subscribe to the feed URLs.",
+        "Host: https://cloud.bixbyapps.com. The old host, almanac.dottie.ai, is the same service: same keys, same feed URLs.",
         "",
         "Send a descriptive User-Agent header, for example Mozilla/5.0 my-agent. The host answers 403 to an empty or default curl User-Agent.",
         "",
@@ -75,7 +76,7 @@ pub fn llms_txt(base: &str) -> String {
         "Seals: a seal calendar stores each event, todo, and note as one alm1. ciphertext. PUT { \"seal\": \"alm1....\" } with the uid in the path. Sealed with a key derived from the write key on the client, so the server cannot read or merge fields inside a seal (see Auth: send the token, not the key). GET returns uid, seal, createdAt, updatedAt. A sealed feed is a shell: UID and X-ALMANAC-SEAL, with no SUMMARY, DTSTART, DUE, or note text. Open it with the write key. A plain calendar is the field API and the readable ICS, VTODO, and Atom feeds. PATCH /v1/c/{id} { \"feed\": \"seal\" | \"plain\" } sets the mode. The server cannot convert existing rows either way.",
         "",
         "Auth: send Authorization: Bearer {token}, where token is the lowercase hex SHA-256 of (key + \"almanac-auth-v1\"). The token logs in but cannot open a seal: the seal key is SHA-256 of (key + \"almanac-seal-v1\"). A client that only ever sends the token keeps the key, and so every seal, away from the server.",
-        "The raw key is still accepted while the calendar shows legacyAuth: true (calendars from before 0.30.0, or created without auth_hash). POST (or PATCH) /v1/c/{id} { \"legacy_auth\": false } turns that off for good. Cloudflare in front of almanac.dottie.ai blocks PATCH: use POST /v1/c/{id} for calendar settings and PUT for items (PUT keeps fields you leave out). To create a calendar without ever sending a key: POST /calendars { \"auth_hash\": sha256hex(token) }. That response has no key.",
+        "The raw key is still accepted while the calendar shows legacyAuth: true (calendars from before 0.30.0, or created without auth_hash). POST (or PATCH) /v1/c/{id} { \"legacy_auth\": false } turns that off for good. Cloudflare in front of the host blocks PATCH: use POST /v1/c/{id} for calendar settings and PUT for items (PUT keeps fields you leave out). To create a calendar without ever sending a key: POST /calendars { \"auth_hash\": sha256hex(token) }. That response has no key.",
         "",
         "Sync: every event, todo and note has rev, from one counter per calendar. GET /v1/c/{id}/changes?since={rev} returns rev, the events, todos and notes changed after it (note bodies included), and deleted: [{ kind, uid, rev }]. since=0 is everything. 410 means the cursor is older than the trash: sync again from 0.",
         "Conflicts: send If-Match: \"{rev}\" on PUT, PATCH or DELETE of one item. 412 { deleted, current } means it changed or was deleted since you read it. Without If-Match the last write wins.",
@@ -126,7 +127,7 @@ const PAGE: &str = r##"<!doctype html>
   <meta property="og:image" content="@IMAGE@">
   <meta property="og:image:width" content="1200">
   <meta property="og:image:height" content="630">
-  <meta property="og:image:alt" content="Almanac. Agent-first calendar, notes and todos.">
+  <meta property="og:image:alt" content="Agent Cloud. Agent-first calendar, notes and todos.">
 @OG_URL@  <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="@TITLE@">
   <meta name="twitter:description" content="@DESC@">
@@ -265,7 +266,7 @@ const NOTES_MOCK: &str = r##"<div class="app" role="img" aria-label="A notes app
 
 const HOME_BODY: &str = r##"<style>@HOME_CSS@</style>
 <div class="wrap">
-<header class="bar"><span class="word">almanac<i>_</i></span><a href="/llms.txt">/llms.txt</a></header>
+<header class="bar"><span class="word">agentcloud<i>_</i></span><a href="/llms.txt">/llms.txt</a></header>
 <section class="hero">
 <h1>Agent-First Calendar, Notes, and Todos</h1>
 <div class="box">
@@ -290,7 +291,7 @@ const HOME_BODY: &str = r##"<style>@HOME_CSS@</style>
 pub fn html_home(base: &str) -> String {
     let origin = base.trim_end_matches('/');
     let prompt = [
-        "Set up Almanac for me.".to_string(),
+        "Set up Agent Cloud for me.".to_string(),
         format!("1. Read {origin}/llms.txt and follow it."),
         "2. Create my calendar over HTTP.".to_string(),
         "3. Store the id and key. The key is shown once.".to_string(),
@@ -304,7 +305,7 @@ pub fn html_home(base: &str) -> String {
         .replace("@CALENDAR@", CALENDAR_MOCK)
         .replace("@NOTES@", NOTES_MOCK)
         .replace("@TODOS@", TODOS_MOCK);
-    page("Almanac", &body, origin)
+    page("Agent Cloud", &body, origin)
 }
 
 pub fn html_created(
@@ -344,5 +345,5 @@ pub fn html_created(
         esc(write),
         esc(key),
     );
-    page("Almanac Calendar", &body, base.trim_end_matches('/'))
+    page("Agent Cloud Calendar", &body, base.trim_end_matches('/'))
 }

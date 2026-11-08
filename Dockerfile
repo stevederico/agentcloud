@@ -45,11 +45,13 @@ RUN apt-get update \
 COPY --from=builder /usr/local/lib/libsqlcipher.so /usr/local/lib/libsqlite3.so* /usr/local/lib/
 RUN ldconfig
 
-COPY --from=builder /build/target/release/almanac /usr/local/bin/almanac
+COPY --from=builder /build/target/release/agentcloud /usr/local/bin/agentcloud
+# The old name, for anything that still runs it (the apps-1 restore test).
+RUN ln -s agentcloud /usr/local/bin/almanac
 
 ENV PORT=8000 \
     HOST=:: \
     DB_PATH=/app/data/calendar.db
 
 EXPOSE 8000
-CMD ["/usr/local/bin/almanac"]
+CMD ["/usr/local/bin/agentcloud"]

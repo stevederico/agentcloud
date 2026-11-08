@@ -2,11 +2,11 @@
 
 mod common;
 
-use almanac::http::Request;
-use almanac::json::Value;
+use agentcloud::http::Request;
+use agentcloud::json::Value;
 use common::*;
 
-fn fill(app: &almanac::server::AppState, cal: &Cal) {
+fn fill(app: &agentcloud::server::AppState, cal: &Cal) {
     let ev = r#"{"summary":"Dentist","start":"2026-10-01T09:00:00-07:00","location":"Fillmore"}"#;
     assert_eq!(call(app, &cal.key, "PUT", &format!("/v1/c/{}/events/e1", cal.id), Some(ev)).0, 201);
     let todo = r#"{"title":"Buy milk","due":"2026-10-02","priority":2,"tags":["home"]}"#;
@@ -28,7 +28,7 @@ fn json_export_holds_all_three_and_no_secrets() {
     );
     assert_eq!(status, 200, "{body}");
     assert!(res.header_value("content-type").unwrap().starts_with("application/json"));
-    assert!(res.header_value("content-disposition").unwrap().contains(&format!("almanac-{}.json", cal.id)));
+    assert!(res.header_value("content-disposition").unwrap().contains(&format!("agentcloud-{}.json", cal.id)));
     assert_eq!(res.header_value("cache-control"), Some("no-store"));
 
     let v = json(&body);

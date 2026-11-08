@@ -158,7 +158,7 @@ fn create_calendar(state: &AppState, req: &Request) -> Response {
         // Nobody can create a calendar while this holds, so say so loudly:
         // it means either real growth or a caller picking its own bucket.
         eprintln!(
-            "almanac: GLOBAL create limit of {}/hour reached, creation is blocked for {retry}s",
+            "agentcloud: GLOBAL create limit of {}/hour reached, creation is blocked for {retry}s",
             limits.creates_global_hour
         );
         return too_many(retry);
@@ -756,7 +756,7 @@ fn export(state: &AppState, req: &Request, cal_id: &str, method: &str) -> Respon
         .header("cache-control", "no-store")
         .header(
             "content-disposition",
-            &format!("attachment; filename=\"almanac-{}.{ext}\"", cal.id),
+            &format!("attachment; filename=\"agentcloud-{}.{ext}\"", cal.id),
         )
 }
 

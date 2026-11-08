@@ -137,7 +137,7 @@ impl From<String> for ChangesError {
 }
 
 impl Db {
-    /// Row counts for the restore test and `almanac stats`. No contents.
+    /// Row counts for the restore test and `agentcloud stats`. No contents.
     pub fn stats(&self) -> Result<Vec<(&'static str, i64)>, String> {
         let mut out = Vec::new();
         for table in ["calendars", "events", "todos", "notes", "trash_events", "trash_todos", "trash_notes"] {

@@ -1,5 +1,5 @@
 [Unit]
-Description=Pull an Almanac export every day
+Description=Pull an Agent Cloud export every day
 
 [Timer]
 OnCalendar=daily

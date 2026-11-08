@@ -53,14 +53,14 @@ fn start_server_with(db: &str, env: &[(&str, &str)]) -> (ServerGuard, u16) {
     // that ours is still alive, and try a fresh port if not.
     for _ in 0..5 {
         let port = free_port();
-        let child = Command::new(env!("CARGO_BIN_EXE_almanac"))
+        let child = Command::new(env!("CARGO_BIN_EXE_agentcloud"))
             .env("PORT", port.to_string())
             .env("HOST", "127.0.0.1")
             .env("DB_PATH", db)
             .envs(env.iter().copied())
             .current_dir(std::env::temp_dir())
             .spawn()
-            .expect("spawn almanac");
+            .expect("spawn agentcloud");
         let mut guard = ServerGuard(child);
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
@@ -82,7 +82,7 @@ fn start_server_with(db: &str, env: &[(&str, &str)]) -> (ServerGuard, u16) {
 
 #[test]
 fn drops_a_connection_that_never_finishes_its_headers() {
-    let (_server, port) = start_server("almanac-slowloris-test.db");
+    let (_server, port) = start_server("agentcloud-slowloris-test.db");
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     // A request line with no terminating blank line: the header loop in
@@ -113,7 +113,7 @@ fn drops_a_connection_that_never_finishes_its_headers() {
 
 #[test]
 fn still_serves_a_well_formed_request() {
-    let (_server, port) = start_server("almanac-normal-test.db");
+    let (_server, port) = start_server("agentcloud-normal-test.db");
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     stream
@@ -150,7 +150,7 @@ fn exchange(port: u16, raw: &[u8]) -> String {
 
 #[test]
 fn drops_a_client_that_drips_bytes_forever() {
-    let (_server, port) = start_server("almanac-drip-test.db");
+    let (_server, port) = start_server("agentcloud-drip-test.db");
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     stream
@@ -191,7 +191,7 @@ fn drops_a_client_that_drips_bytes_forever() {
 
 #[test]
 fn answers_oversized_and_unsupported_requests_instead_of_dropping() {
-    let (_server, port) = start_server("almanac-reject-test.db");
+    let (_server, port) = start_server("agentcloud-reject-test.db");
 
     let big = exchange(
         port,
@@ -219,7 +219,7 @@ fn answers_oversized_and_unsupported_requests_instead_of_dropping() {
 
 #[test]
 fn honors_expect_100_continue() {
-    let (_server, port) = start_server("almanac-continue-test.db");
+    let (_server, port) = start_server("agentcloud-continue-test.db");
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     stream
@@ -244,7 +244,7 @@ fn honors_expect_100_continue() {
 
 #[test]
 fn a_rotated_agent_key_applies_on_the_next_start() {
-    let db = std::env::temp_dir().join(format!("almanac-rotate-{}.db", std::process::id()));
+    let db = std::env::temp_dir().join(format!("agentcloud-rotate-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&db);
     let db = db.to_str().unwrap().to_string();
     let get = |port: u16, key: &str| {
@@ -267,7 +267,7 @@ fn a_rotated_agent_key_applies_on_the_next_start() {
 
 #[test]
 fn scrub_legacy_keys_blanks_plaintext_on_boot_and_keeps_keys_working() {
-    let db = std::env::temp_dir().join(format!("almanac-scrub-{}.db", std::process::id()));
+    let db = std::env::temp_dir().join(format!("agentcloud-scrub-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&db);
     let snapshot = format!("{}.pre-0.11.0", db.display());
     let _ = std::fs::remove_file(&snapshot);
@@ -288,7 +288,7 @@ fn scrub_legacy_keys_blanks_plaintext_on_boot_and_keeps_keys_working() {
     drop(first);
 
     let plaintext = |path: &str| {
-        let conn = almanac::sqlite::Connection::open(path).unwrap();
+        let conn = agentcloud::sqlite::Connection::open(path).unwrap();
         conn.query("SELECT agent_key FROM calendars WHERE agent_key != ''", &[], |r| r.text(0))
             .unwrap()
             .len()
@@ -322,7 +322,7 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     if Command::new("python3").arg("--version").output().is_err() {
         return; // The script needs python3; nothing to test without it.
     }
-    let db = std::env::temp_dir().join(format!("almanac-pull-{}.db", std::process::id()));
+    let db = std::env::temp_dir().join(format!("agentcloud-pull-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&db);
     let (_server, port) = start_server(db.to_str().unwrap());
 
@@ -349,7 +349,7 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     );
     assert!(put.starts_with("HTTP/1.1 201"), "{put}");
 
-    let work = std::env::temp_dir().join(format!("almanac-pull-work-{}", std::process::id()));
+    let work = std::env::temp_dir().join(format!("agentcloud-pull-work-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).unwrap();
     let creds = work.join("hosted-calendars.json");
@@ -361,11 +361,11 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     let run = || {
         Command::new("python3")
             .arg(&script)
-            .env("ALMANAC_BASE", format!("http://127.0.0.1:{port}"))
-            .env("ALMANAC_CREDS", &creds)
-            .env("ALMANAC_BACKUP_DIR", &dest)
-            .env("ALMANAC_BACKUP_KEEP", "2")
-            .env("ALMANAC_BIN", env!("CARGO_BIN_EXE_almanac"))
+            .env("AGENTCLOUD_BASE", format!("http://127.0.0.1:{port}"))
+            .env("AGENTCLOUD_CREDS", &creds)
+            .env("AGENTCLOUD_BACKUP_DIR", &dest)
+            .env("AGENTCLOUD_BACKUP_KEEP", "2")
+            .env("AGENTCLOUD_BIN", env!("CARGO_BIN_EXE_agentcloud"))
             .output()
             .unwrap()
     };
@@ -386,9 +386,9 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     assert!(raw.starts_with(b"ALMF1\n"), "the export is sealed on disk");
     let text = String::from_utf8_lossy(&raw);
     assert!(!text.contains("Backed up") && !text.contains("still here"), "no plaintext on disk");
-    let opened = Command::new(env!("CARGO_BIN_EXE_almanac"))
+    let opened = Command::new(env!("CARGO_BIN_EXE_agentcloud"))
         .arg("open-file")
-        .env("ALMANAC_CREDS", &creds)
+        .env("AGENTCLOUD_CREDS", &creds)
         .stdin(std::fs::File::open(&saved[0]).unwrap())
         .output()
         .unwrap();
@@ -420,7 +420,7 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     write_creds(&key);
     let down = Command::new("python3")
         .arg(&script)
-        .env("ALMANAC_BIN", env!("CARGO_BIN_EXE_almanac"))
+        .env("ALMANAC_BIN", env!("CARGO_BIN_EXE_agentcloud"))
         .env("ALMANAC_BASE", "http://127.0.0.1:1")
         .env("ALMANAC_CREDS", &creds)
         .env("ALMANAC_BACKUP_DIR", &dest)

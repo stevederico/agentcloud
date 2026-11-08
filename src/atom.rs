@@ -39,7 +39,7 @@ pub fn render_atom(feed_id: &str, title: &str, updated: &str, entries: &[AtomEnt
     out.push_str(&format!("  <id>{}</id>\n", xml_escape(feed_id)));
     out.push_str(&format!("  <title>{}</title>\n", xml_escape(title)));
     out.push_str(&format!("  <updated>{}</updated>\n", xml_escape(updated)));
-    out.push_str("  <author><name>Almanac</name></author>\n");
+    out.push_str("  <author><name>Agent Cloud</name></author>\n");
     for e in entries {
         out.push_str("  <entry>\n");
         out.push_str(&format!("    <id>{}</id>\n", xml_escape(&e.id)));
@@ -108,7 +108,7 @@ mod tests {
              \x20 <id>urn:almanac:cal_1:notes</id>\n\
              \x20 <title>Trip Notes</title>\n\
              \x20 <updated>2026-09-02T11:30:00.000Z</updated>\n\
-             \x20 <author><name>Almanac</name></author>\n\
+             \x20 <author><name>Agent Cloud</name></author>\n\
              \x20 <entry>\n\
              \x20   <id>urn:almanac:cal_1:n1</id>\n\
              \x20   <title>Packing &lt;list&gt;</title>\n\

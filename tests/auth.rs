@@ -2,9 +2,9 @@
 
 mod common;
 
-use almanac::http::Request;
-use almanac::seal::{auth_token, open_file, seal_file};
-use almanac::sha256::sha256_hex;
+use agentcloud::http::Request;
+use agentcloud::seal::{auth_token, open_file, seal_file};
+use agentcloud::sha256::sha256_hex;
 use common::*;
 
 #[test]
@@ -115,6 +115,6 @@ fn sealed_files_round_trip_and_bind_to_the_calendar() {
     assert!(open_file("k", "cal_a", &bad).is_err());
 }
 
-fn text_of(v: &almanac::json::Value, key: &str) -> String {
+fn text_of(v: &agentcloud::json::Value, key: &str) -> String {
     text(v, key).to_string()
 }

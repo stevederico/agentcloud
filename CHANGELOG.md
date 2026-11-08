@@ -1,3 +1,14 @@
+0.38.0
+
+  Rename to Agent Cloud
+  Rename binary agentcloud
+  Rename skill folder
+  Read agentcloud config
+  Accept AGENTCLOUD env
+  Keep almanac fallbacks
+  Keep image symlink
+  Keep crypto domains
+
 0.37.0
 
   Rename shared clients
