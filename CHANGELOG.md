@@ -1,3 +1,8 @@
+0.36.0
+
+  Keep previous seal key
+  Open kept seals
+
 0.35.0
 
   Lock If-Match writes

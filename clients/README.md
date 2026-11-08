@@ -4,7 +4,7 @@ Shared client code for the Dottie apps. Each app keeps a copy; this folder is th
 
 | File | Used by | What |
 |---|---|---|
-| `web/almanac-client.js` | Dottie Calendar, Todos, Notes (web) | Sign in, auth token, non-extractable seal key in IndexedDB, open/seal, `changes` sync, `If-Match`, trash |
+| `web/almanac-client.js` | Dottie Calendar, Todos, Notes (web) | Sign in, auth token, non-extractable seal key in IndexedDB (and the previous one after a 401, to open unsent seals once a rotated key signs in), open/seal, `changes` sync, `If-Match`, trash |
 | `web/login.js` | the same | The `<dottie-login>` element |
 | `shell/almanac-lib.sh` | Dottie Calendar, Todos, Notes (Omarchy) | Token on curl's stdin, private temp dir, open/seal via the `almanac` binary, `If-Match` |
 

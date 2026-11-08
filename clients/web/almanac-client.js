@@ -98,6 +98,39 @@ export async function openWith(cryptoKey, calendarId, kind, uid, wire) {
   }
 }
 
+/** Open a seal with the first key that fits; null keys are skipped. */
+export async function openWithAny(keys, calendarId, kind, uid, wire) {
+  for (const key of keys) {
+    if (!key) continue
+    try {
+      return await openWith(key, calendarId, kind, uid, wire)
+    } catch {}
+  }
+  throw new Error("seal was rejected")
+}
+
+/**
+ * Open sealed rows (`{uid, seal}`) kept on this device, as after a sign-in
+ * with a rotated key. Each is tried with the calendar's previous key (kept by
+ * `store.keepPrevious` when the old key was rejected), then the session's.
+ * Returns `{opened: [{row, fields}], unreadable: [row], previous}`. Seal the
+ * opened fields again with the session's key and store them; only then call
+ * `store.forgetPrevious(session.id)`. Keep the unreadable rows: never drop them.
+ */
+export async function openKept(store, session, kind, rows) {
+  const previous = await store.previous(session.id)
+  const out = { opened: [], unreadable: [], previous: !!previous }
+  for (const row of rows || []) {
+    try {
+      const text = await openWithAny([previous, session.sealKey], session.id, kind, row.uid, row.seal)
+      out.opened.push({ row, fields: JSON.parse(text) })
+    } catch {
+      out.unreadable.push(row)
+    }
+  }
+  return out
+}
+
 export class AlmanacError extends Error {
   constructor(message, status, data) {
     super(message)
@@ -395,10 +428,13 @@ export function createSync(client, { onChange, onError, intervalMs = 60000, curs
  * The session in IndexedDB: id, name, feed, token, and the seal key as a
  * non-extractable CryptoKey. Never the write key. Falls back to memory when
  * IndexedDB is unavailable. `clearLegacy(names)` removes old localStorage
- * entries that held the raw key.
+ * entries that held the raw key. `keepPrevious(session)` keeps the seal key
+ * as the calendar's previous key past `clear()`, for unsent items sealed with
+ * it; `previous(id)` reads it, `forgetPrevious(id)` deletes it.
  */
 export function sessionStore(name = "almanac") {
   let memory = null
+  const previousKeys = new Map()
   const idb = globalThis.indexedDB
 
   function db() {
@@ -454,6 +490,28 @@ export function sessionStore(name = "almanac") {
       if (!idb) return
       try {
         await tx("readwrite", (s) => s.delete("current"))
+      } catch {}
+    },
+    async keepPrevious(session) {
+      previousKeys.set(session.id, session.sealKey)
+      if (!idb) return
+      try {
+        await tx("readwrite", (s) => s.put(session.sealKey, `previous:${session.id}`))
+      } catch {}
+    },
+    async previous(id) {
+      if (!idb) return previousKeys.get(id) || null
+      try {
+        return (await tx("readonly", (s) => s.get(`previous:${id}`))) || previousKeys.get(id) || null
+      } catch {
+        return previousKeys.get(id) || null
+      }
+    },
+    async forgetPrevious(id) {
+      previousKeys.delete(id)
+      if (!idb) return
+      try {
+        await tx("readwrite", (s) => s.delete(`previous:${id}`))
       } catch {}
     },
     clearLegacy(keys) {

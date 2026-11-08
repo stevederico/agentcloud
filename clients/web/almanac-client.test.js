@@ -13,6 +13,9 @@ import {
   sealKey,
   sealWith,
   openWith,
+  openWithAny,
+  openKept,
+  sessionStore,
   newKey,
   signIn,
   createClient,
@@ -156,4 +159,32 @@ test("sync reports a full load first, then only changes", async () => {
   assert.equal(seen[0].full, true)
   assert.equal(seen[1].full, false)
   assert.deepEqual(seen[1].notes.map((n) => n.title), ["Two"])
+})
+
+test("unsent seals from before a key rotation open with the kept previous key", async () => {
+  const store = sessionStore("almanac-test")
+  const old = { id: "cal_r", feed: "seal", sealKey: await sealKey(newKey()) }
+  const now = { id: "cal_r", feed: "seal", sealKey: await sealKey(newKey()) }
+  const rows = [
+    { uid: "a", seal: await sealWith(old.sealKey, "cal_r", "todo", "a", '{"title":"Before"}') },
+    { uid: "b", seal: await sealWith(now.sealKey, "cal_r", "todo", "b", '{"title":"After"}') },
+    { uid: "c", seal: await sealWith(await sealKey(newKey()), "cal_r", "todo", "c", '{"title":"Other"}') },
+  ]
+  await store.save(old)
+  await store.keepPrevious(old)
+  await store.clear()
+  const previous = await store.previous("cal_r")
+  assert.equal(previous, old.sealKey, "the session ending keeps the previous key")
+  assert.equal(previous.extractable, false)
+  assert.equal(await store.previous("cal_other"), null)
+  const kept = await openKept(store, now, "todo", rows)
+  assert.equal(kept.previous, true)
+  assert.deepEqual(kept.opened.map((o) => `${o.row.uid}:${o.fields.title}`), ["a:Before", "b:After"])
+  assert.deepEqual(kept.unreadable.map((row) => row.uid), ["c"], "neither key: kept, not dropped")
+  await store.forgetPrevious("cal_r")
+  assert.equal(await store.previous("cal_r"), null)
+  const later = await openKept(store, now, "todo", rows)
+  assert.equal(later.previous, false)
+  assert.deepEqual(later.unreadable.map((row) => row.uid), ["a", "c"])
+  await assert.rejects(openWithAny([null, now.sealKey], "cal_r", "todo", "a", rows[0].seal), /rejected/)
 })
