@@ -3,7 +3,7 @@
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
-BIN="${ALMANAC_BIN:-$root/target/debug/almanac}"
+BIN="${AGENTCLOUD_BIN:-${ALMANAC_BIN:-$root/target/debug/agentcloud}}"
 work=$(mktemp -d); chmod 700 "$work"
 port=$((30000 + RANDOM % 20000))
 AGENT_KEY=h FEED_TOKEN=f PORT=$port HOST=127.0.0.1 DB_PATH="$work/c.db" BACKUP_INTERVAL_HOURS=0 "$BIN" >/dev/null 2>&1 &

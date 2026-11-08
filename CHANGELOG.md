@@ -1,3 +1,7 @@
+0.39.0
+
+  Test the agentcloud binary
+
 0.38.0
 
   Rename to Agent Cloud

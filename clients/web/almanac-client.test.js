@@ -24,7 +24,7 @@ import {
 } from "./almanac-client.js"
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..")
-const BIN = process.env.ALMANAC_BIN || join(root, "target", "debug", "almanac")
+const BIN = process.env.AGENTCLOUD_BIN || process.env.ALMANAC_BIN || join(root, "target", "debug", "agentcloud")
 const UA = { "User-Agent": "almanac-client-test" }
 let server
 let base
