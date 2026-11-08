@@ -46,5 +46,18 @@ chmod 600 "$work/creds.json"
   exit $fails
 )
 fails=$?
+
+# Rename defaults: ~/.config/agentcloud first, ~/.config/almanac as fallback,
+# and the old prod host moves to cloud.bixbyapps.com.
+home=$(mktemp -d); mkdir -p "$home/almanac"
+echo '[{"id":"cal_x","key":"k","write":"https://almanac.dottie.ai/v1/c/cal_x/events"}]' >"$home/almanac/hosted-calendars.json"
+got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" bash -c '. "$1"; almanac_load; echo "$ALMANAC_CONFIG $ALMANAC_ROOT"' _ "$here/almanac-lib.sh")
+check "falls back to ~/.config/almanac, old host to cloud" "$got" "$home/almanac/hosted-calendars.json https://cloud.bixbyapps.com/v1/c/cal_x"
+mkdir -p "$home/agentcloud"; cp "$home/almanac/hosted-calendars.json" "$home/agentcloud/"
+got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" bash -c '. "$1"; echo "$ALMANAC_CONFIG"' _ "$here/almanac-lib.sh")
+check "prefers ~/.config/agentcloud" "$got" "$home/agentcloud/hosted-calendars.json"
+got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" AGENTCLOUD_BASE=http://h:1 bash -c '. "$1"; almanac_load; echo "$ALMANAC_ROOT"' _ "$here/almanac-lib.sh")
+check "AGENTCLOUD_BASE wins" "$got" "http://h:1/v1/c/cal_x"
+rm -rf "$home"
 check "temp dir removed on exit" "$(test -e "$(cat "$work/tmpdir")" && echo left || echo gone)" "gone"
 exit $fails

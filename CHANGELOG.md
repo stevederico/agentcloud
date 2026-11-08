@@ -1,3 +1,10 @@
+0.37.0
+
+  Rename shared clients
+  Add cloud-login element
+  Read agentcloud config
+  Default to cloud host
+
 0.36.0
 
   Keep previous seal key

@@ -1,5 +1,6 @@
 # Almanac shell client library. Source it; do not run it.
-# Copied into each Dottie Omarchy app; this file in the almanac repo is the source.
+# Agent Cloud shell client. Copied into each Omarchy app; this file in the
+# almanac repo is the source.
 #
 #   . "$(dirname "$0")/almanac-lib.sh"
 #   almanac_load [CAL_ID] || exit       # sets ALMANAC_ID, ALMANAC_ROOT, ALMANAC_TOKEN
@@ -11,11 +12,23 @@
 # (`-K -`), so `ps` cannot see it either. Temp files live in one private
 # directory that is removed on exit.
 #
-# Env: ALMANAC_CONFIG (credentials file), ALMANAC_BASE, ALMANAC_UA, ALMANAC_BIN.
+# Env: AGENTCLOUD_CONFIG or ALMANAC_CONFIG (credentials file), AGENTCLOUD_BASE or
+# ALMANAC_BASE, ALMANAC_UA, AGENTCLOUD_BIN or ALMANAC_BIN.
 
-ALMANAC_CONFIG="${ALMANAC_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/almanac/hosted-calendars.json}"
-ALMANAC_BASE="${ALMANAC_BASE:-https://almanac.dottie.ai}"
-ALMANAC_UA="${ALMANAC_UA:-Mozilla/5.0 dottie-omarchy}"
+_almanac_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
+if [[ -z ${ALMANAC_CONFIG-} ]]; then
+  ALMANAC_CONFIG="${AGENTCLOUD_CONFIG:-$_almanac_cfg/agentcloud/hosted-calendars.json}"
+  # Installs from before the rename keep their credentials in ~/.config/almanac.
+  if [[ -z ${AGENTCLOUD_CONFIG-} && ! -f $ALMANAC_CONFIG && -f $_almanac_cfg/almanac/hosted-calendars.json ]]; then
+    ALMANAC_CONFIG="$_almanac_cfg/almanac/hosted-calendars.json"
+  fi
+fi
+unset _almanac_cfg
+# Set when the caller chose a server; otherwise the credentials' write URL
+# decides, with the old almanac.dottie.ai host moved to the Agent Cloud host.
+ALMANAC_BASE_SET="${AGENTCLOUD_BASE:+1}${ALMANAC_BASE:+1}"
+ALMANAC_BASE="${AGENTCLOUD_BASE:-${ALMANAC_BASE:-https://cloud.bixbyapps.com}}"
+ALMANAC_UA="${ALMANAC_UA:-Mozilla/5.0 agentcloud-omarchy}"
 ALMANAC_TMPDIR=""
 
 # A new temp file in this run's private directory (made by almanac_load).
@@ -67,7 +80,7 @@ PY
   local write
   write=$(sed -n 2p <<<"$out")
   ALMANAC_TOKEN=$(sed -n 3p <<<"$out")
-  if [[ $write == */v1/c/*/events* ]]; then
+  if [[ -z $ALMANAC_BASE_SET && $write == */v1/c/*/events* && $write != https://almanac.dottie.ai/* ]]; then
     ALMANAC_ROOT="${write%/events*}"
   else
     ALMANAC_ROOT="${ALMANAC_BASE%/}/v1/c/${ALMANAC_ID}"
@@ -126,10 +139,12 @@ _almanac_supports_seal() {
   [[ -x $1 ]] && LC_ALL=C grep -aq 'almanac-auth-v1' "$1"
 }
 
-# The almanac binary (0.30.0 or later), for sealed calendars.
+# The agentcloud (or older almanac 0.30.0+) binary, for sealed calendars.
 almanac_bin() {
   local b
-  for b in "${ALMANAC_BIN-}" "$(command -v almanac 2>/dev/null)" \
+  for b in "${AGENTCLOUD_BIN-}" "${ALMANAC_BIN-}" \
+    "$(command -v agentcloud 2>/dev/null)" "$(command -v almanac 2>/dev/null)" \
+    "$HOME/Projects/agentcloud/target/release/agentcloud" "$HOME/Projects/agentcloud/target/debug/agentcloud" \
     "$HOME/Projects/almanac/target/release/almanac" "$HOME/Projects/almanac/target/debug/almanac"; do
     if [[ -n $b ]] && _almanac_supports_seal "$b"; then
       printf '%s\n' "$b"
@@ -146,7 +161,7 @@ almanac_bin() {
 almanac_open() {
   local kind="$1" bin
   bin=$(almanac_bin) || bin=""
-  ALMANAC_CREDS="$ALMANAC_CONFIG" OPEN_BIN="$bin" OPEN_CAL="$ALMANAC_ID" OPEN_KIND="$kind" python3 -c '
+  AGENTCLOUD_CREDS="$ALMANAC_CONFIG" ALMANAC_CREDS="$ALMANAC_CONFIG" OPEN_BIN="$bin" OPEN_CAL="$ALMANAC_ID" OPEN_KIND="$kind" python3 -c '
 import json, os, subprocess, sys
 data = json.load(sys.stdin)
 binary, cal = os.environ["OPEN_BIN"], os.environ["OPEN_CAL"]
@@ -197,7 +212,7 @@ for k in ("uid", "seal", "rev", "sequence", "createdAt", "updatedAt", "sealed", 
 json.dump(d, open(sys.argv[2], "w"))' "$plain" "$clean" || return 1
   local wire
   # Not a pipe: a failed seal must fail here, not write {"seal": ""}.
-  wire=$(ALMANAC_CREDS="$ALMANAC_CONFIG" "$bin" seal --cal "$ALMANAC_ID" --kind "$kind" --uid "$uid" <"$clean") || return 1
+  wire=$(AGENTCLOUD_CREDS="$ALMANAC_CONFIG" ALMANAC_CREDS="$ALMANAC_CONFIG" "$bin" seal --cal "$ALMANAC_ID" --kind "$kind" --uid "$uid" <"$clean") || return 1
   [[ $wire == alm1.* ]] || return 1
   printf '%s' "$wire" |
     python3 -c 'import json,sys; json.dump({"seal": sys.stdin.read().strip()}, open(sys.argv[1], "w"))' "$out" || return 1

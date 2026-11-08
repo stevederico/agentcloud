@@ -1,5 +1,5 @@
 (function () {
-  if (customElements.get("dottie-login")) return
+  if (customElements.get("cloud-login")) return
 
   var style = [
     ":host {",
@@ -82,7 +82,7 @@
     "@media (prefers-reduced-motion: reduce) { .block { animation: none; } }"
   ].join("\n")
 
-  class DottieLogin extends HTMLElement {
+  class CloudLogin extends HTMLElement {
     static get observedAttributes() { return ["name", "dismissable"] }
 
     constructor() {
@@ -101,7 +101,7 @@
         + "<button class=\"close\" type=\"button\" hidden>Close</button>"
         + "<div class=\"name\"><button class=\"chip selected\" type=\"button\" disabled></button></div>"
         + "<form class=\"form\" autocomplete=\"on\">"
-        + "<div class=\"block-field\"><input class=\"field\" name=\"username\" autocomplete=\"username\" placeholder=\"Almanac ID\" aria-label=\"Almanac ID\" spellcheck=\"false\" required><span class=\"block\" aria-hidden=\"true\"></span></div>"
+        + "<div class=\"block-field\"><input class=\"field\" name=\"username\" autocomplete=\"username\" placeholder=\"Cloud ID\" aria-label=\"Cloud ID\" spellcheck=\"false\" required><span class=\"block\" aria-hidden=\"true\"></span></div>"
         + "<div class=\"block-field\"><input class=\"field\" name=\"password\" type=\"password\" autocomplete=\"current-password\" placeholder=\"Write Key\" aria-label=\"Write Key\" spellcheck=\"false\" required><span class=\"block\" aria-hidden=\"true\"></span></div>"
         + "<button class=\"chip bordered\" type=\"submit\">Connect</button>"
         + "<p class=\"error\" role=\"alert\" hidden></p>"
@@ -124,7 +124,7 @@
         event.preventDefault()
         var id = self._id.value.replace(/^\s+|\s+$/g, "")
         var key = self._key.value.replace(/^\s+|\s+$/g, "")
-        if (!id) { self.error = "Almanac ID is required"; return }
+        if (!id) { self.error = "Cloud ID is required"; return }
         if (!key) { self.error = "Write Key is required"; return }
         self.error = ""
         self.dispatchEvent(new CustomEvent("connect", {
@@ -209,5 +209,7 @@
     }
   }
 
-  customElements.define("dottie-login", DottieLogin)
+  customElements.define("cloud-login", CloudLogin)
+  // The old tag name, for pages not yet moved to <cloud-login>.
+  if (!customElements.get("dottie-login")) customElements.define("dottie-login", class extends CloudLogin {})
 })()
