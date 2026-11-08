@@ -142,6 +142,8 @@ mod tests {
             name: "Trip\nPlan".into(),
             created_at: "2026-09-01T00:00:00.000Z".into(),
             feed: "plain".into(),
+            auth_hash: "SECRET-AUTH".into(),
+            legacy_auth: true,
         }
     }
 

@@ -13,12 +13,20 @@ use crate::util::{event_uid, hex_encode, random_bytes, secret};
 const EVENT_COLS: &str = "uid, summary, description, location, dtstart, dtend, \
      all_day, transparent, sequence, created_at, updated_at, rrule, tzid, seal";
 
+const CAL_COLS: &str = "id, feed_token, key_hash, name, created_at, feed, auth_hash, legacy_auth";
+
 #[derive(Debug, Clone)]
 pub struct CalendarRow {
     pub id: String,
     pub feed_token: String,
-    /// SHA-256 hex of the write key. The key itself is never kept.
+    /// SHA-256 hex of the raw write key. Only used while `legacy_auth` is on;
+    /// blanked when it is turned off. The key itself is never kept.
     pub key_hash: String,
+    /// SHA-256 hex of the auth token (`seal::auth_token(key)`). Empty until the
+    /// calendar was created with one or a client logged in once with the raw key.
+    pub auth_hash: String,
+    /// Whether the raw write key is still accepted as a bearer.
+    pub legacy_auth: bool,
     pub name: String,
     pub created_at: String,
     /// `seal` stores ciphertext. `plain` is the readable feed.
@@ -266,6 +274,7 @@ impl Db {
         )?;
         migrate_calendars(path, &conn)?;
         migrate_feed_column(&conn)?;
+        migrate_auth_columns(&conn)?;
         migrate_events(&conn)?;
         crate::todos::migrate(&conn)?;
         crate::notes::migrate(&conn)?;
@@ -300,7 +309,7 @@ impl Db {
 
     pub fn get_calendar(&self, id: &str) -> Result<Option<CalendarRow>, String> {
         self.conn.query_row(
-            "SELECT id, feed_token, key_hash, name, created_at, feed FROM calendars WHERE id = ?1",
+            &format!("SELECT {CAL_COLS} FROM calendars WHERE id = ?1"),
             &[Bind::Text(id)],
             row_calendar,
         )
@@ -308,7 +317,7 @@ impl Db {
 
     pub fn get_calendar_by_feed_token(&self, token: &str) -> Result<Option<CalendarRow>, String> {
         self.conn.query_row(
-            "SELECT id, feed_token, key_hash, name, created_at, feed FROM calendars WHERE feed_token = ?1",
+            &format!("SELECT {CAL_COLS} FROM calendars WHERE feed_token = ?1"),
             &[Bind::Text(token)],
             row_calendar,
         )
@@ -339,8 +348,8 @@ impl Db {
         // throwaway so that rolling back to a build that compares it can never
         // match an empty `Authorization` header.
         self.conn.execute(
-            "INSERT INTO calendars (id, feed_token, agent_key, key_hash, name, created_at, feed)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO calendars (id, feed_token, agent_key, key_hash, name, created_at, feed, auth_hash, legacy_auth)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
             &[
                 Bind::Text(id),
                 Bind::Text(&feed),
@@ -349,12 +358,74 @@ impl Db {
                 Bind::Text(name),
                 Bind::Text(&now),
                 Bind::Text(mode),
+                Bind::Text(&sha256_hex(&crate::seal::auth_token(&key))),
             ],
         )?;
         let row = self
             .get_calendar(id)?
             .ok_or_else(|| "failed to create calendar".to_string())?;
         Ok((row, key))
+    }
+
+    /// Create a calendar from the hash of a client-made auth token. The client
+    /// made the write key and keeps it; the server never sees it, so the raw
+    /// key is not accepted (`legacy_auth` off) and no `key_hash` is stored.
+    pub fn create_calendar_with_auth_hash(
+        &self,
+        name: Option<&str>,
+        auth_hash: &str,
+        feed_mode: &str,
+    ) -> Result<CalendarRow, String> {
+        if !is_sha256_hex(auth_hash) {
+            return Err("auth_hash must be 64 lowercase hex characters".into());
+        }
+        let name = name.unwrap_or("Almanac").trim();
+        let name = if name.is_empty() { "Almanac" } else { name };
+        if name.len() > 80 {
+            return Err("name is too long".into());
+        }
+        let mode = crate::seal::feed_mode(feed_mode)?;
+        let id = format!("cal_{}", hex_encode(&random_bytes(8)));
+        self.conn.execute(
+            "INSERT INTO calendars (id, feed_token, agent_key, key_hash, name, created_at, feed, auth_hash, legacy_auth)
+             VALUES (?1, ?2, ?3, '', ?4, ?5, ?6, ?7, 0)",
+            &[
+                Bind::Text(&id),
+                Bind::Text(&secret()),
+                Bind::Text(&secret()),
+                Bind::Text(name),
+                Bind::Text(&now_iso()),
+                Bind::Text(mode),
+                Bind::Text(auth_hash),
+            ],
+        )?;
+        self.get_calendar(&id)?
+            .ok_or_else(|| "failed to create calendar".to_string())
+    }
+
+    /// Record the auth-token hash for a calendar that so far only had the raw
+    /// key's hash. Called on a successful raw-key login, the one moment the
+    /// server holds the key, so existing clients upgrade without a reset.
+    pub fn set_auth_hash(&self, id: &str, auth_hash: &str) -> Result<(), String> {
+        self.conn.execute(
+            "UPDATE calendars SET auth_hash = ?1 WHERE id = ?2 AND auth_hash = ''",
+            &[Bind::Text(auth_hash), Bind::Text(id)],
+        )?;
+        Ok(())
+    }
+
+    /// Stop accepting the raw write key. Also blanks its hash, so the file no
+    /// longer holds anything derived from the key that opens seals.
+    pub fn disable_legacy_auth(&self, id: &str) -> Result<CalendarRow, String> {
+        let cal = self.get_calendar(id)?.ok_or_else(|| "not found".to_string())?;
+        if cal.auth_hash.is_empty() {
+            return Err("no auth token yet: sign in once with the auth token first".into());
+        }
+        self.conn.execute(
+            "UPDATE calendars SET legacy_auth = 0, key_hash = '' WHERE id = ?1",
+            &[Bind::Text(id)],
+        )?;
+        self.get_calendar(id)?.ok_or_else(|| "not found".to_string())
     }
 
     /// Remove a calendar and everything on it. Children first: there are no
@@ -398,7 +469,8 @@ impl Db {
         if let Some(existing) = self.get_calendar("home")? {
             let mut changed = Vec::new();
             let key_hash = sha256_hex(agent_key);
-            if existing.key_hash != key_hash {
+            let auth_hash = sha256_hex(&crate::seal::auth_token(agent_key));
+            if existing.key_hash != key_hash || existing.auth_hash != auth_hash {
                 changed.push("agent_key");
             }
             if existing.feed_token != feed_token {
@@ -411,8 +483,8 @@ impl Db {
                 return Ok((existing, changed));
             }
             self.conn.execute(
-                "UPDATE calendars SET feed_token = ?1, agent_key = ?2, key_hash = ?3, name = ?4
-                 WHERE id = 'home'",
+                "UPDATE calendars SET feed_token = ?1, agent_key = ?2, key_hash = ?3, name = ?4,
+                 auth_hash = ?5, legacy_auth = 1 WHERE id = 'home'",
                 &[
                     Bind::Text(feed_token),
                     // Overwrite the legacy plaintext too: a rotated-away key
@@ -420,6 +492,7 @@ impl Db {
                     Bind::Text(&secret()),
                     Bind::Text(&key_hash),
                     Bind::Text(name),
+                    Bind::Text(&auth_hash),
                 ],
             )?;
             let row = self
@@ -976,6 +1049,8 @@ fn row_calendar(row: &crate::sqlite::Row) -> CalendarRow {
         name: row.text(3),
         created_at: row.text(4),
         feed: row.text(5),
+        auth_hash: row.text(6),
+        legacy_auth: row.i64(7) != 0,
     }
 }
 
@@ -1087,6 +1162,24 @@ fn migrate_feed_column(db: &Connection) -> Result<(), String> {
         return Ok(());
     }
     db.execute_batch("ALTER TABLE calendars ADD COLUMN feed TEXT NOT NULL DEFAULT 'plain';")
+}
+
+/// 0.30.0: the auth token split from the write key. Existing rows keep
+/// accepting the raw key (`legacy_auth` 1) and get `auth_hash` on their next
+/// raw-key login.
+fn migrate_auth_columns(db: &Connection) -> Result<(), String> {
+    let cols = column_names(db, "calendars")?;
+    if !cols.iter().any(|c| c == "auth_hash") {
+        db.execute_batch("ALTER TABLE calendars ADD COLUMN auth_hash TEXT NOT NULL DEFAULT '';")?;
+    }
+    if !cols.iter().any(|c| c == "legacy_auth") {
+        db.execute_batch("ALTER TABLE calendars ADD COLUMN legacy_auth INTEGER NOT NULL DEFAULT 1;")?;
+    }
+    Ok(())
+}
+
+pub(crate) fn is_sha256_hex(s: &str) -> bool {
+    s.len() == 64 && s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 impl Db {
@@ -1656,6 +1749,7 @@ pub fn json_calendar(row: &CalendarRow, base: &str) -> Value {
         ),
         ("createdAt", Value::String(row.created_at.clone())),
         ("feed", Value::String(row.feed.clone())),
+        ("legacyAuth", Value::Bool(row.legacy_auth)),
     ])
 }
 
@@ -2097,6 +2191,15 @@ mod tests {
         let db = Db::open(&path).unwrap();
         let cal = db.get_calendar("cal_old").unwrap().unwrap();
         assert_eq!(cal.key_hash, sha256_hex("old-key"));
+        // 0.30.0: no auth token yet, raw key still accepted. The first raw-key
+        // login records the token hash, then the token works on its own.
+        assert!(cal.auth_hash.is_empty() && cal.legacy_auth);
+        let token = crate::seal::auth_token("old-key");
+        assert!(crate::server::calendar_auth(&db, "cal_old", &format!("Bearer {token}")).is_none());
+        assert!(crate::server::calendar_auth(&db, "cal_old", "Bearer old-key").is_some());
+        let cal = db.get_calendar("cal_old").unwrap().unwrap();
+        assert_eq!(cal.auth_hash, sha256_hex(&token));
+        assert!(crate::server::calendar_auth(&db, "cal_old", &format!("Bearer {token}")).is_some());
 
         // The plaintext is still there, so the previous release can run.
         let conn = Connection::open(&path).unwrap();

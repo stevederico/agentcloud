@@ -71,6 +71,18 @@ impl Drop for Ctx {
     }
 }
 
+const AUTH_DOMAIN: &[u8] = b"almanac-auth-v1";
+
+/// The bearer token a client sends. Derived from the write key on the device,
+/// so the server, which only ever sees this token, cannot rebuild the seal key.
+/// SHA-256(write key || "almanac-auth-v1") as lowercase hex.
+pub fn auth_token(write_key: &str) -> String {
+    let mut msg = Vec::with_capacity(write_key.len() + AUTH_DOMAIN.len());
+    msg.extend_from_slice(write_key.as_bytes());
+    msg.extend_from_slice(AUTH_DOMAIN);
+    crate::util::hex_encode(&sha256(&msg))
+}
+
 fn derive(write_key: &str) -> [u8; 32] {
     let mut msg = Vec::with_capacity(write_key.len() + DOMAIN.len());
     msg.extend_from_slice(write_key.as_bytes());
@@ -108,78 +120,8 @@ pub fn seal(
     if plaintext.len() > 48 * 1024 {
         return Err("item is too long".into());
     }
-    let key = derive(write_key);
-    let nonce = random_bytes(NONCE);
-    let extra = aad(calendar_id, kind, uid);
-    let ctx = Ctx(unsafe { EVP_CIPHER_CTX_new() });
-    if ctx.0.is_null() {
-        return Err("seal failed".into());
-    }
-    let ok = unsafe {
-        EVP_EncryptInit_ex(ctx.0, EVP_aes_256_gcm(), ptr::null_mut(), ptr::null(), ptr::null()) == 1
-            && EVP_CIPHER_CTX_ctrl(
-                ctx.0,
-                EVP_CTRL_GCM_SET_IVLEN,
-                NONCE as c_int,
-                ptr::null_mut(),
-            ) == 1
-            && EVP_EncryptInit_ex(ctx.0, ptr::null(), ptr::null_mut(), key.as_ptr(), nonce.as_ptr())
-                == 1
-    };
-    if !ok {
-        return Err("seal failed".into());
-    }
-    let mut ignored = 0;
-    let aad_ok = unsafe {
-        EVP_EncryptUpdate(
-            ctx.0,
-            ptr::null_mut(),
-            &mut ignored,
-            extra.as_ptr(),
-            extra.len() as c_int,
-        ) == 1
-    };
-    if !aad_ok {
-        return Err("seal failed".into());
-    }
-    let mut out = vec![0u8; plaintext.len() + 16];
-    let mut out_len = 0;
-    let updated = unsafe {
-        EVP_EncryptUpdate(
-            ctx.0,
-            out.as_mut_ptr(),
-            &mut out_len,
-            plaintext.as_ptr(),
-            plaintext.len() as c_int,
-        ) == 1
-    };
-    if !updated {
-        return Err("seal failed".into());
-    }
-    let mut final_len = 0;
-    let finished = unsafe {
-        EVP_EncryptFinal_ex(ctx.0, out.as_mut_ptr().add(out_len as usize), &mut final_len) == 1
-    };
-    if !finished {
-        return Err("seal failed".into());
-    }
-    let n = out_len as usize + final_len as usize;
-    let mut tag = [0u8; TAG];
-    let tagged = unsafe {
-        EVP_CIPHER_CTX_ctrl(
-            ctx.0,
-            EVP_CTRL_GCM_GET_TAG,
-            TAG as c_int,
-            tag.as_mut_ptr(),
-        ) == 1
-    };
-    if !tagged {
-        return Err("seal failed".into());
-    }
-    let mut packed = Vec::with_capacity(NONCE + n + TAG);
-    packed.extend_from_slice(&nonce);
-    packed.extend_from_slice(&out[..n]);
-    packed.extend_from_slice(&tag);
+    let packed = gcm_seal(&derive(write_key), &aad(calendar_id, kind, uid), plaintext)
+        .map_err(|_| "seal failed".to_string())?;
     let wire = format!("{PREFIX}{}", base64url(&packed));
     if wire.len() > MAX_WIRE {
         return Err("seal is too long".into());
@@ -198,78 +140,138 @@ pub fn open(
         return Err("kind must be event, todo, or note".into());
     }
     let packed = decode_wire(wire)?;
-    if packed.len() < NONCE + TAG {
-        return Err("seal is invalid".into());
+    gcm_open(&derive(write_key), &aad(calendar_id, kind, uid), &packed)
+        .map_err(|_| "seal was rejected".to_string())
+}
+
+/// AES-256-GCM. Returns nonce || ciphertext || tag.
+fn gcm_seal(key: &[u8; 32], extra: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, ()> {
+    if plaintext.len() > c_int::MAX as usize - 32 || extra.len() > c_int::MAX as usize {
+        return Err(());
+    }
+    let nonce = random_bytes(NONCE);
+    let ctx = Ctx(unsafe { EVP_CIPHER_CTX_new() });
+    if ctx.0.is_null() {
+        return Err(());
+    }
+    let ok = unsafe {
+        EVP_EncryptInit_ex(ctx.0, EVP_aes_256_gcm(), ptr::null_mut(), ptr::null(), ptr::null()) == 1
+            && EVP_CIPHER_CTX_ctrl(ctx.0, EVP_CTRL_GCM_SET_IVLEN, NONCE as c_int, ptr::null_mut()) == 1
+            && EVP_EncryptInit_ex(ctx.0, ptr::null(), ptr::null_mut(), key.as_ptr(), nonce.as_ptr()) == 1
+    };
+    if !ok {
+        return Err(());
+    }
+    let mut ignored = 0;
+    if unsafe {
+        EVP_EncryptUpdate(ctx.0, ptr::null_mut(), &mut ignored, extra.as_ptr(), extra.len() as c_int)
+    } != 1
+    {
+        return Err(());
+    }
+    let mut out = vec![0u8; plaintext.len() + 16];
+    let mut out_len = 0;
+    if unsafe {
+        EVP_EncryptUpdate(ctx.0, out.as_mut_ptr(), &mut out_len, plaintext.as_ptr(), plaintext.len() as c_int)
+    } != 1
+    {
+        return Err(());
+    }
+    let mut final_len = 0;
+    if unsafe { EVP_EncryptFinal_ex(ctx.0, out.as_mut_ptr().add(out_len as usize), &mut final_len) } != 1 {
+        return Err(());
+    }
+    let n = out_len as usize + final_len as usize;
+    let mut tag = [0u8; TAG];
+    if unsafe { EVP_CIPHER_CTX_ctrl(ctx.0, EVP_CTRL_GCM_GET_TAG, TAG as c_int, tag.as_mut_ptr()) } != 1 {
+        return Err(());
+    }
+    let mut packed = Vec::with_capacity(NONCE + n + TAG);
+    packed.extend_from_slice(&nonce);
+    packed.extend_from_slice(&out[..n]);
+    packed.extend_from_slice(&tag);
+    Ok(packed)
+}
+
+/// Opens `gcm_seal` output. Any failure, including a wrong key or tampering, is `Err`.
+fn gcm_open(key: &[u8; 32], extra: &[u8], packed: &[u8]) -> Result<Vec<u8>, ()> {
+    if packed.len() < NONCE + TAG || packed.len() > c_int::MAX as usize || extra.len() > c_int::MAX as usize {
+        return Err(());
     }
     let (nonce, rest) = packed.split_at(NONCE);
     let (ciphertext, tag) = rest.split_at(rest.len() - TAG);
-    let key = derive(write_key);
-    let extra = aad(calendar_id, kind, uid);
     let ctx = Ctx(unsafe { EVP_CIPHER_CTX_new() });
     if ctx.0.is_null() {
-        return Err("seal was rejected".into());
+        return Err(());
     }
     let ok = unsafe {
         EVP_DecryptInit_ex(ctx.0, EVP_aes_256_gcm(), ptr::null_mut(), ptr::null(), ptr::null()) == 1
-            && EVP_CIPHER_CTX_ctrl(
-                ctx.0,
-                EVP_CTRL_GCM_SET_IVLEN,
-                NONCE as c_int,
-                ptr::null_mut(),
-            ) == 1
-            && EVP_DecryptInit_ex(ctx.0, ptr::null(), ptr::null_mut(), key.as_ptr(), nonce.as_ptr())
-                == 1
+            && EVP_CIPHER_CTX_ctrl(ctx.0, EVP_CTRL_GCM_SET_IVLEN, NONCE as c_int, ptr::null_mut()) == 1
+            && EVP_DecryptInit_ex(ctx.0, ptr::null(), ptr::null_mut(), key.as_ptr(), nonce.as_ptr()) == 1
     };
     if !ok {
-        return Err("seal was rejected".into());
+        return Err(());
     }
     let mut ignored = 0;
-    let aad_ok = unsafe {
-        EVP_DecryptUpdate(
-            ctx.0,
-            ptr::null_mut(),
-            &mut ignored,
-            extra.as_ptr(),
-            extra.len() as c_int,
-        ) == 1
-    };
-    if !aad_ok {
-        return Err("seal was rejected".into());
+    if unsafe {
+        EVP_DecryptUpdate(ctx.0, ptr::null_mut(), &mut ignored, extra.as_ptr(), extra.len() as c_int)
+    } != 1
+    {
+        return Err(());
     }
     let mut out = vec![0u8; ciphertext.len() + 16];
     let mut out_len = 0;
-    let updated = unsafe {
-        EVP_DecryptUpdate(
-            ctx.0,
-            out.as_mut_ptr(),
-            &mut out_len,
-            ciphertext.as_ptr(),
-            ciphertext.len() as c_int,
-        ) == 1
-    };
-    if !updated {
-        return Err("seal was rejected".into());
+    if unsafe {
+        EVP_DecryptUpdate(ctx.0, out.as_mut_ptr(), &mut out_len, ciphertext.as_ptr(), ciphertext.len() as c_int)
+    } != 1
+    {
+        return Err(());
     }
-    let tag_ok = unsafe {
-        EVP_CIPHER_CTX_ctrl(
-            ctx.0,
-            EVP_CTRL_GCM_SET_TAG,
-            TAG as c_int,
-            tag.as_ptr() as *mut u8,
-        ) == 1
-    };
-    if !tag_ok {
-        return Err("seal was rejected".into());
+    if unsafe { EVP_CIPHER_CTX_ctrl(ctx.0, EVP_CTRL_GCM_SET_TAG, TAG as c_int, tag.as_ptr() as *mut u8) } != 1 {
+        return Err(());
     }
     let mut final_len = 0;
-    let finished = unsafe {
-        EVP_DecryptFinal_ex(ctx.0, out.as_mut_ptr().add(out_len as usize), &mut final_len) == 1
-    };
-    if !finished {
-        return Err("seal was rejected".into());
+    if unsafe { EVP_DecryptFinal_ex(ctx.0, out.as_mut_ptr().add(out_len as usize), &mut final_len) } != 1 {
+        return Err(());
     }
     out.truncate(out_len as usize + final_len as usize);
     Ok(out)
+}
+
+/// Header of a sealed file: `ALMF1\n` then nonce || ciphertext || tag. The
+/// associated data binds the file to its calendar, so a file cannot be opened
+/// as another calendar's.
+const FILE_MAGIC: &[u8] = b"ALMF1\n";
+
+pub fn seal_file(write_key: &str, calendar_id: &str, plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    let extra = aad(calendar_id, "file", "");
+    let packed = gcm_seal(&derive(write_key), &extra, plaintext).map_err(|_| "seal failed".to_string())?;
+    let mut out = FILE_MAGIC.to_vec();
+    out.extend_from_slice(&packed);
+    Ok(out)
+}
+
+pub fn open_file(write_key: &str, calendar_id: &str, sealed: &[u8]) -> Result<Vec<u8>, String> {
+    let packed = sealed.strip_prefix(FILE_MAGIC).ok_or("not a sealed almanac file")?;
+    gcm_open(&derive(write_key), &aad(calendar_id, "file", ""), packed)
+        .map_err(|_| "file was rejected (wrong calendar key or damaged)".to_string())
+}
+
+fn file_cmd(cmd: &str, cal: Option<&str>) -> Result<String, String> {
+    use std::io::{Read, Write};
+    let (calendar_id, key) = load_key(cal)?;
+    let mut input = Vec::new();
+    std::io::stdin().read_to_end(&mut input).map_err(|e| e.to_string())?;
+    let out = if cmd == "seal-file" {
+        seal_file(&key, &calendar_id, &input)?
+    } else {
+        open_file(&key, &calendar_id, &input)?
+    };
+    let mut stdout = std::io::stdout();
+    stdout.write_all(&out).map_err(|e| e.to_string())?;
+    stdout.flush().map_err(|e| e.to_string())?;
+    // Already written; main prints nothing more for an empty string.
+    Ok(String::new())
 }
 
 pub fn validate_wire(wire: &str) -> Result<(), String> {
@@ -387,7 +389,11 @@ fn base64url_decode(text: &str) -> Result<Vec<u8>, ()> {
     Ok(out)
 }
 
-/// `almanac seal|open`. The key is read from the credentials file and never printed.
+const USAGE: &str = "usage: almanac seal|open [--cal ID] --kind event|todo|note --uid UID\n       almanac auth-token [--cal ID]\n       almanac seal-file|open-file [--cal ID] < in > out";
+
+/// `almanac seal|open|auth-token|seal-file|open-file`. The key is read from
+/// the credentials file and never printed. `auth-token` prints the bearer
+/// derived from it, which logs in but cannot open a seal.
 pub fn run(cmd: &str, args: &[String]) -> Result<String, String> {
     let mut cal: Option<String> = None;
     let mut kind: Option<String> = None;
@@ -400,9 +406,16 @@ pub fn run(cmd: &str, args: &[String]) -> Result<String, String> {
             "--cal" => cal = Some(value.clone()),
             "--kind" => kind = Some(value.clone()),
             "--uid" => uid = Some(value.clone()),
-            _ => return Err("usage: almanac seal|open --cal ID --kind event|todo|note --uid UID".into()),
+            _ => return Err(USAGE.into()),
         }
         i += 2;
+    }
+    if cmd == "auth-token" {
+        let (_, key) = load_key(cal.as_deref())?;
+        return Ok(auth_token(&key));
+    }
+    if cmd == "seal-file" || cmd == "open-file" {
+        return file_cmd(cmd, cal.as_deref());
     }
     let kind = kind.ok_or("kind is required")?;
     let uid = uid.ok_or("uid is required")?;

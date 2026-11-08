@@ -160,7 +160,7 @@ fn create_calendar(state: &AppState, req: &Request) -> Response {
         return too_many(retry);
     }
     let ctype = req.header("content-type");
-    let (name, feed) = match parse_calendar_create(ctype, &req.body) {
+    let (name, feed, auth_hash) = match parse_calendar_create(ctype, &req.body) {
         Ok(parsed) => parsed,
         Err(e) => return json_err(400, &e),
     };
@@ -169,6 +169,19 @@ fn create_calendar(state: &AppState, req: &Request) -> Response {
         Ok(n) if n >= limits.max_calendars => return json_err(503, "calendar limit reached"),
         Ok(_) => {}
         Err(e) => return json_err(500, &e),
+    }
+    // The client made the key and sends only its auth-token hash: the
+    // server never sees the key, so it never could open a seal.
+    if let Some(auth_hash) = auth_hash {
+        let saved = match db.create_calendar_with_auth_hash(name.as_deref(), &auth_hash, &feed) {
+            Ok(row) => row,
+            Err(e) => return json_err(400, &e),
+        };
+        let base = request_base(req, &state.public_base);
+        return match calendar_view(&db, &saved, None, &base) {
+            Ok(v) => json_response(201, &stringify(&v)),
+            Err(e) => json_err(500, &e),
+        };
     }
     let (saved, key) = match db.create_calendar(name.as_deref(), None, None, None, &feed) {
         Ok(created) => created,
@@ -194,11 +207,13 @@ fn create_calendar(state: &AppState, req: &Request) -> Response {
     json_response(201, &stringify(&view))
 }
 
-fn parse_calendar_create(ctype: &str, body: &[u8]) -> Result<(Option<String>, String), String> {
+type CalendarCreate = (Option<String>, String, Option<String>);
+
+fn parse_calendar_create(ctype: &str, body: &[u8]) -> Result<CalendarCreate, String> {
     if ctype.contains("application/json") {
         let text = std::str::from_utf8(body).map_err(|_| "body must be valid JSON")?;
         if text.trim().is_empty() {
-            return Ok((None, "seal".into()));
+            return Ok((None, "seal".into(), None));
         }
         let value = parse_json(text).map_err(|_| "body must be valid JSON")?;
         if !matches!(value, Value::Object(_)) {
@@ -219,7 +234,15 @@ fn parse_calendar_create(ctype: &str, body: &[u8]) -> Result<(Option<String>, St
             )?
             .to_string(),
         };
-        return Ok((name, feed));
+        let auth_hash = match value.get("auth_hash").or_else(|| value.get("authHash")) {
+            None | Some(Value::Null) => None,
+            Some(v) => Some(
+                v.as_str()
+                    .ok_or_else(|| "auth_hash must be a string".to_string())?
+                    .to_string(),
+            ),
+        };
+        return Ok((name, feed, auth_hash));
     }
     if ctype.contains("application/x-www-form-urlencoded") {
         let text = String::from_utf8_lossy(body);
@@ -228,11 +251,11 @@ fn parse_calendar_create(ctype: &str, body: &[u8]) -> Result<(Option<String>, St
             let key = it.next().unwrap_or("");
             let val = it.next().unwrap_or("");
             if key == "name" {
-                return Ok((Some(urlencoding_decode(val)), "seal".into()));
+                return Ok((Some(urlencoding_decode(val)), "seal".into(), None));
             }
         }
     }
-    Ok((None, "seal".into()))
+    Ok((None, "seal".into(), None))
 }
 
 pub(crate) fn urlencoding_decode(value: &str) -> String {
@@ -553,16 +576,36 @@ fn set_calendar_feed(state: &AppState, req: &Request, id: &str) -> Response {
         Ok(v) => v,
         Err(e) => return json_err(400, &e),
     };
-    let mode = match body.get("feed").and_then(Value::as_str) {
-        Some(mode) => mode,
-        None => return json_err(400, "feed must be seal or plain"),
+    let mode = body.get("feed").and_then(Value::as_str);
+    let legacy = body.get("legacy_auth").or_else(|| body.get("legacyAuth"));
+    if mode.is_none() && legacy.is_none() {
+        return json_err(400, "feed must be seal or plain");
+    }
+    let legacy_off = match legacy {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(false)) => true,
+        // Turning it back on would need the raw key's hash, which is gone.
+        Some(_) => return json_err(400, "legacy_auth can only be set to false"),
     };
+    if legacy_off && is_home(&cal) {
+        return json_err(403, "home calendar keeps its environment key");
+    }
     let db = lock_db(state);
-    let saved = match db.set_feed(&cal.id, mode) {
-        Ok(row) => row,
-        Err(e) if e == "not found" => return json_err(404, &e),
-        Err(e) => return json_err(400, &e),
-    };
+    let mut saved = cal.clone();
+    if let Some(mode) = mode {
+        saved = match db.set_feed(&cal.id, mode) {
+            Ok(row) => row,
+            Err(e) if e == "not found" => return json_err(404, &e),
+            Err(e) => return json_err(400, &e),
+        };
+    }
+    if legacy_off {
+        saved = match db.disable_legacy_auth(&cal.id) {
+            Ok(row) => row,
+            Err(e) if e == "not found" => return json_err(404, &e),
+            Err(e) => return json_err(409, &e),
+        };
+    }
     let base = request_base(req, &state.public_base);
     match calendar_view(&db, &saved, None, &base) {
         Ok(v) => json_response(200, &stringify(&v)),
@@ -917,15 +960,31 @@ pub(crate) fn parse_body(req: &Request) -> Result<Value, String> {
     parse_json(text).map_err(|_| "body must be an object".into())
 }
 
-fn calendar_auth(db: &Db, id: &str, header: &str) -> Option<CalendarRow> {
-    let cal = db.get_calendar(id).ok().flatten()?;
-    // Keys are stored hashed; compare hashes. `safe_equal` refuses an empty
-    // expected value, so a row without a hash can never authenticate.
-    if safe_equal(&sha256_hex(&bearer(header)), &cal.key_hash) {
-        Some(cal)
-    } else {
-        None
+pub(crate) fn calendar_auth(db: &Db, id: &str, header: &str) -> Option<CalendarRow> {
+    let mut cal = db.get_calendar(id).ok().flatten()?;
+    let token = bearer(header);
+    if token.is_empty() {
+        return None;
     }
+    // Only hashes are stored; compare hashes. `safe_equal` refuses an empty
+    // expected value, so a row without a hash can never authenticate.
+    let given = sha256_hex(&token);
+    if safe_equal(&given, &cal.auth_hash) {
+        return Some(cal);
+    }
+    // The raw write key, accepted until the calendar turns `legacy_auth` off.
+    // This is the one moment the server holds the key: record the auth-token
+    // hash so clients can move to the token without a reset.
+    if cal.legacy_auth && safe_equal(&given, &cal.key_hash) {
+        if cal.auth_hash.is_empty() {
+            let auth_hash = sha256_hex(&crate::seal::auth_token(&token));
+            if db.set_auth_hash(&cal.id, &auth_hash).is_ok() {
+                cal.auth_hash = auth_hash;
+            }
+        }
+        return Some(cal);
+    }
+    None
 }
 
 fn bearer(header: &str) -> String {

@@ -18,10 +18,12 @@ use almanac::time::now_iso;
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if let Some(cmd) = args.first() {
-        if cmd == "seal" || cmd == "open" {
+        if matches!(cmd.as_str(), "seal" | "open" | "auth-token" | "seal-file" | "open-file") {
             match almanac::seal::run(cmd, &args[1..]) {
                 Ok(out) => {
-                    println!("{out}");
+                    if !out.is_empty() {
+                        println!("{out}");
+                    }
                     return;
                 }
                 Err(e) => {

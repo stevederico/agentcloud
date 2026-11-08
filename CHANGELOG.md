@@ -1,3 +1,9 @@
+0.30.0
+
+  Split auth token from write key
+  Create calendars from an auth hash
+  Add auth-token, seal-file, open-file commands
+
 0.29.1
 
   Pin base images by digest
