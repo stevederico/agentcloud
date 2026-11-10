@@ -1,6 +1,6 @@
 [package]
 name = "agentcloud"
-version = "0.42.0"
+version = "0.42.1"
 edition = "2021"
 description = "Agent Cloud: calendar, todos and notes agents write; Apple Calendar subscribes"
 license = "MIT"

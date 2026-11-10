@@ -1,3 +1,7 @@
+0.42.1
+
+  Bump debian runtime base to bookworm-20261104-slim (apt 2.6.2)
+
 0.42.0
 
   Restore ALMANAC_* env fallbacks
