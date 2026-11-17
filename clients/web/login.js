@@ -1,7 +1,7 @@
 (function () {
   if (customElements.get("cloud-login")) return
 
-  var style = [
+  const style = [
     ":host {",
     "  display: flex;",
     "  flex-direction: column;",
@@ -96,7 +96,7 @@
     connectedCallback() {
       if (this._ready) return
       this._ready = true
-      var root = this.attachShadow({ mode: "open" })
+      const root = this.attachShadow({ mode: "open" })
       root.innerHTML = "<style>" + style + "</style>"
         + "<button class=\"close\" type=\"button\" hidden>Close</button>"
         + "<div class=\"name\"><button class=\"chip selected\" type=\"button\" disabled></button></div>"
@@ -117,13 +117,13 @@
       if (this._idValue) this._id.value = this._idValue
       this.error = this._error
       this.busy = this._busy
-      var blocks = root.querySelectorAll(".block-field")
-      for (var i = 0; i < blocks.length; i++) this._watch(blocks[i])
-      var self = this
+      const blocks = root.querySelectorAll(".block-field")
+      for (let i = 0; i < blocks.length; i++) this._watch(blocks[i])
+      const self = this
       root.querySelector("form").addEventListener("submit", function (event) {
         event.preventDefault()
-        var id = self._id.value.replace(/^\s+|\s+$/g, "")
-        var key = self._key.value.replace(/^\s+|\s+$/g, "")
+        const id = self._id.value.replace(/^\s+|\s+$/g, "")
+        const key = self._key.value.replace(/^\s+|\s+$/g, "")
         if (!id) { self.error = "Cloud ID is required"; return }
         if (!key) { self.error = "Write Key is required"; return }
         self.error = ""
@@ -196,11 +196,11 @@
     }
 
     _watch(wrap) {
-      var input = wrap.querySelector("input")
-      var block = wrap.querySelector(".block")
-      var place = function () {
-        var pos = input.selectionStart
-        var at = pos == null ? input.value.length : pos
+      const input = wrap.querySelector("input")
+      const block = wrap.querySelector(".block")
+      const place = function () {
+        const pos = input.selectionStart
+        const at = pos == null ? input.value.length : pos
         block.style.left = "calc(10px + " + at + "ch)"
       }
       ;["focus", "input", "keyup", "click", "select"].forEach(function (type) {
