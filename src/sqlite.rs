@@ -7,7 +7,6 @@ const SQLITE_ROW: c_int = 100;
 const SQLITE_DONE: c_int = 101;
 
 type Destructor = Option<unsafe extern "C" fn(*mut c_void)>;
-// SQLITE_STATIC: bind strings live until finalize in the same call.
 const SQLITE_STATIC: Destructor = None;
 
 #[repr(C)]
@@ -80,8 +79,6 @@ impl Connection {
         Self::open_keyed(path, None)
     }
 
-    /// Open `path`. When `key` is set, `sqlite3_key` is the first call after
-    /// open. The key is a passphrase; it is not written into SQL and not logged.
     pub fn open_keyed(path: impl AsRef<Path>, key: Option<&str>) -> Result<Self, String> {
         let path = path.as_ref().to_string_lossy();
         let c_path = CString::new(path.as_ref()).map_err(|_| "db path")?;
@@ -186,10 +183,6 @@ impl Connection {
         Ok(rows)
     }
 
-    /// Start a write transaction. `BEGIN IMMEDIATE` takes the write lock up
-    /// front, so a read-then-write sequence cannot be interleaved by another
-    /// writer. Dropping the guard without `commit` rolls back, including when
-    /// the caller returns early with `?` or panics.
     pub fn begin(&self) -> Result<Transaction<'_>, String> {
         self.execute_batch("BEGIN IMMEDIATE")?;
         Ok(Transaction {
@@ -237,8 +230,6 @@ pub struct Transaction<'a> {
 impl Transaction<'_> {
     pub fn commit(mut self) -> Result<(), String> {
         let done = self.conn.execute_batch("COMMIT");
-        // A failed COMMIT (disk full, busy) leaves the transaction open;
-        // Drop rolls it back.
         if done.is_ok() {
             self.open = false;
         }

@@ -210,6 +210,5 @@
   }
 
   customElements.define("cloud-login", CloudLogin)
-  // The old tag name, for pages not yet moved to <cloud-login>.
   if (!customElements.get("dottie-login")) customElements.define("dottie-login", class extends CloudLogin {})
 })()

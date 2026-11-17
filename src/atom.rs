@@ -1,8 +1,3 @@
-//! Atom 1.0 feeds, for notes. Calendar apps have no standard place for a note,
-//! but every feed reader can subscribe to this.
-
-/// XML-safe text. Characters XML 1.0 forbids (most control characters,
-/// U+FFFE, U+FFFF) are dropped, then the five specials are escaped.
 pub fn xml_escape(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
     for c in value.chars() {
@@ -23,7 +18,6 @@ pub fn xml_escape(value: &str) -> String {
 pub struct AtomEntry {
     pub id: String,
     pub title: String,
-    /// RFC 3339.
     pub updated: String,
     pub published: String,
     pub content: String,
@@ -31,7 +25,6 @@ pub struct AtomEntry {
     pub seal: String,
 }
 
-/// `updated` is the feed's own timestamp: the newest entry's, or now.
 pub fn render_atom(feed_id: &str, title: &str, updated: &str, entries: &[AtomEntry]) -> String {
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n");

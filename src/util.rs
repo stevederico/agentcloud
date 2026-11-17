@@ -22,12 +22,10 @@ pub fn secret() -> String {
     hex_encode(&random_bytes(24))
 }
 
-/// `evt-` + UUID v4 from /dev/urandom.
 pub fn event_uid() -> String {
     prefixed_uid("evt")
 }
 
-/// `<prefix>-` + UUID v4 from /dev/urandom.
 pub fn prefixed_uid(prefix: &str) -> String {
     let mut b = random_bytes(16);
     b[6] = (b[6] & 0x0f) | 0x40;

@@ -1,6 +1,3 @@
-//! Nothing that works as a credential may be committed. Failures name the file
-//! and never the secret.
-
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -22,12 +19,10 @@ fn tracked() -> Vec<(String, Vec<u8>)> {
         .split(|b| *b == 0)
         .filter(|n| !n.is_empty())
         .map(|n| String::from_utf8_lossy(n).into_owned())
-        // Deleted but not yet committed, or a submodule: nothing to read.
         .filter_map(|name| std::fs::read(repo().join(&name)).ok().map(|bytes| (name, bytes)))
         .collect()
 }
 
-/// Does `bytes` hold a run of exactly `len` lowercase hex digits?
 fn has_hex_run(bytes: &[u8], len: usize) -> bool {
     let is_hex = |b: u8| b.is_ascii_digit() || (b'a'..=b'f').contains(&b) || (b'A'..=b'F').contains(&b);
     let mut run = 0;
@@ -49,8 +44,6 @@ fn has_hex_run(bytes: &[u8], len: usize) -> bool {
 
 #[test]
 fn no_tracked_file_holds_a_key_sized_hex_string() {
-    // Every key and feed token is 24 random bytes as hex: 48 characters.
-    // (SHA-256 hashes are 64, so test vectors and stored hashes pass.)
     let bad: Vec<String> = tracked()
         .into_iter()
         .filter(|(_, bytes)| has_hex_run(bytes, 48))
@@ -63,12 +56,11 @@ fn no_tracked_file_holds_a_key_sized_hex_string() {
 fn none_of_this_machines_credentials_are_in_a_tracked_file() {
     let Some(home) = std::env::var_os("HOME") else { return };
     let home = PathBuf::from(home);
-    // The new config dir first, then the old one machines are moving off.
     let Some(text) = [".config/agentcloud/hosted-calendars.json", ".config/almanac/hosted-calendars.json"]
         .iter()
         .find_map(|p| std::fs::read_to_string(home.join(p)).ok())
     else {
-        return; // No credentials here (CI): the hex check above still applies.
+        return;
     };
     let list = agentcloud::json::parse(&text).expect("credentials file is JSON");
     let mut secrets: Vec<String> = Vec::new();
@@ -111,14 +103,11 @@ fn credential_and_data_paths_are_git_ignored() {
         let ignored = git(&["check-ignore", "-q", path]).status.success();
         assert!(ignored, "{path} would be committed by `git add .`");
     }
-    // The example file has to stay committable.
     assert!(!git(&["check-ignore", "-q", ".env.example"]).status.success());
 }
 
 #[test]
 fn the_scanner_agrees_with_these_tests() {
-    // Built at run time: a literal 48-hex fixture here would trip the very
-    // check this file runs, and the commit hook.
     let key = "0123456789abcdef".repeat(3);
     assert_eq!(key.len(), 48);
     assert!(has_hex_run(format!("key={key}.").as_bytes(), 48));

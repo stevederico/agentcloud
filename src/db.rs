@@ -20,20 +20,12 @@ const CAL_COLS: &str =
 pub struct CalendarRow {
     pub id: String,
     pub feed_token: String,
-    /// SHA-256 hex of the raw write key. Only used while `legacy_auth` is on;
-    /// blanked when it is turned off. The key itself is never kept.
     pub key_hash: String,
-    /// SHA-256 hex of the auth token (`seal::auth_token(key)`). Empty until the
-    /// calendar was created with one or a client logged in once with the raw key.
     pub auth_hash: String,
-    /// Whether the raw write key is still accepted as a bearer.
     pub legacy_auth: bool,
-    /// During a key rotation: the new key's auth-token hash. It works next to
-    /// `auth_hash` until the rotation is committed or cancelled.
     pub next_auth_hash: String,
     pub name: String,
     pub created_at: String,
-    /// `seal` stores ciphertext. `plain` is the readable feed.
     pub feed: String,
 }
 
@@ -53,7 +45,6 @@ pub struct EventRow {
     pub rrule: String,
     pub tzid: String,
     pub seal: String,
-    /// Calendar-wide revision of the last change. Sync cursor and `If-Match` value.
     pub rev: i64,
     pub exdates: Vec<String>,
     pub overrides: Vec<EventOverride>,
@@ -115,7 +106,6 @@ pub struct Db {
     pub(crate) conn: Connection,
 }
 
-/// First 16 bytes of an unencrypted SQLite file. SQLCipher replaces them.
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -169,16 +159,10 @@ fn calendar_count(conn: &Connection) -> Result<i64, String> {
         .unwrap_or(0))
 }
 
-/// Quote a SQL string literal. Used for the export target path and the
-/// passphrase. The statement is not logged.
 fn sql_literal(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// Export a plaintext file into an encrypted one, and swap it into place only
-/// after the copy answers and still has the same calendars. A failure leaves
-/// the original file where it was. The plaintext copy is deleted in this same
-/// call. `sqlite3_rekey` cannot encrypt a file that was never keyed.
 fn encrypt_file(path: &Path, key: &str) -> Result<(), String> {
     let dest = sibling(path, "encrypting");
     let plain_tmp = sibling(path, "plain-tmp");
@@ -237,10 +221,6 @@ impl Db {
         Self::open_with(path, None)
     }
 
-    /// `key` is the `DB_KEY` passphrase. Unset or empty keeps a plaintext file.
-    /// A plaintext file is encrypted once, then the plaintext copy is deleted.
-    /// A keyed file without the passphrase, or with the wrong one, is refused
-    /// before any write.
     pub fn open_with(path: impl AsRef<Path>, key: Option<&str>) -> Result<Self, String> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -259,14 +239,11 @@ impl Db {
             return Err("database is encrypted; set DB_KEY".into());
         }
         let conn = Connection::open_keyed(path, key)?;
-        // A read, before schema writes. A wrong key fails here and the file
-        // stays as it was. A new file has nothing to read yet.
         if key.is_some() && kind != FileKind::Missing {
             if ping_conn(&conn).is_err() {
                 return Err("database key was rejected".into());
             }
         }
-        // Wait for another connection's write lock instead of failing at once.
         conn.execute_batch("PRAGMA busy_timeout = 5000;")?;
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS calendars (
@@ -288,7 +265,6 @@ impl Db {
         Ok(Self { conn })
     }
 
-    /// Cheap liveness probe for `/health`.
     pub fn ping(&self) -> Result<(), String> {
         self.conn
             .query_row("SELECT 1", &[], |row| row.i64(0))?
@@ -330,8 +306,6 @@ impl Db {
         )
     }
 
-    /// Returns the row and the plaintext write key. This is the only moment
-    /// the key exists outside the caller: the row holds its hash.
     pub fn create_calendar(
         &self,
         name: Option<&str>,
@@ -351,9 +325,6 @@ impl Db {
         let now = now_iso();
         let feed = feed_token.map(str::to_string).unwrap_or_else(secret);
         let key = agent_key.map(str::to_string).unwrap_or_else(secret);
-        // `agent_key` is a legacy column, still NOT NULL. It gets a random
-        // throwaway so that rolling back to a build that compares it can never
-        // match an empty `Authorization` header.
         self.conn.execute(
             "INSERT INTO calendars (id, feed_token, agent_key, key_hash, name, created_at, feed, auth_hash, legacy_auth)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1)",
@@ -374,9 +345,6 @@ impl Db {
         Ok((row, key))
     }
 
-    /// Create a calendar from the hash of a client-made auth token. The client
-    /// made the write key and keeps it; the server never sees it, so the raw
-    /// key is not accepted (`legacy_auth` off) and no `key_hash` is stored.
     pub fn create_calendar_with_auth_hash(
         &self,
         name: Option<&str>,
@@ -410,9 +378,6 @@ impl Db {
             .ok_or_else(|| "failed to create calendar".to_string())
     }
 
-    /// Record the auth-token hash for a calendar that so far only had the raw
-    /// key's hash. Called on a successful raw-key login, the one moment the
-    /// server holds the key, so existing clients upgrade without a reset.
     pub fn set_auth_hash(&self, id: &str, auth_hash: &str) -> Result<(), String> {
         self.conn.execute(
             "UPDATE calendars SET auth_hash = ?1 WHERE id = ?2 AND auth_hash = ''",
@@ -421,8 +386,6 @@ impl Db {
         Ok(())
     }
 
-    /// Start a key rotation: the new key's token works alongside the old one
-    /// until `commit_rotation`, so a client can re-seal items in between.
     pub fn begin_rotation(&self, id: &str, next_auth_hash: &str) -> Result<(), String> {
         if !is_sha256_hex(next_auth_hash) {
             return Err("auth_hash must be 64 lowercase hex characters".into());
@@ -442,10 +405,6 @@ impl Db {
         Ok(())
     }
 
-    /// Finish a rotation: only the new key's token works from now on, the raw
-    /// key never again. Sealed items still in the trash were sealed with the
-    /// old key and could never be opened after a restore, so they go. With
-    /// `feeds`, every subscribe URL gets a new token too.
     pub fn commit_rotation(&self, id: &str, feeds: bool) -> Result<CalendarRow, String> {
         let tx = self.conn.begin()?;
         let cal = self.get_calendar(id)?.ok_or_else(|| "not found".to_string())?;
@@ -485,8 +444,6 @@ impl Db {
         Ok(row)
     }
 
-    /// Stop accepting the raw write key. Also blanks its hash, so the file no
-    /// longer holds anything derived from the key that opens seals.
     pub fn disable_legacy_auth(&self, id: &str) -> Result<CalendarRow, String> {
         let cal = self.get_calendar(id)?.ok_or_else(|| "not found".to_string())?;
         if cal.auth_hash.is_empty() {
@@ -499,10 +456,6 @@ impl Db {
         self.get_calendar(id)?.ok_or_else(|| "not found".to_string())
     }
 
-    /// Remove a calendar and everything on it. Children first: there are no
-    /// foreign keys, so a crash between statements must not leave rows whose
-    /// calendar is already gone. Dropping the transaction rolls the whole
-    /// delete back.
     pub fn delete_calendar(&self, id: &str) -> Result<bool, String> {
         let tx = self.conn.begin()?;
         if self.get_calendar(id)?.is_none() {
@@ -515,7 +468,6 @@ impl Db {
             "DELETE FROM todos WHERE calendar_id = ?1",
             "DELETE FROM notes WHERE calendar_id = ?1",
             "DELETE FROM feeds WHERE calendar_id = ?1",
-            // After the items: their delete triggers just filled these.
             "DELETE FROM trash_events WHERE calendar_id = ?1",
             "DELETE FROM trash_todos WHERE calendar_id = ?1",
             "DELETE FROM trash_notes WHERE calendar_id = ?1",
@@ -528,14 +480,6 @@ impl Db {
         Ok(true)
     }
 
-    /// Make the `home` calendar match the environment.
-    ///
-    /// The env is the source of truth: a changed `AGENT_KEY`, `FEED_TOKEN` or
-    /// `CAL_NAME` is written through. Before, an existing `home` was returned
-    /// untouched, so rotating a leaked key in the env silently did nothing.
-    ///
-    /// Returns the row and which fields changed (`"created"`, `"agent_key"`,
-    /// `"feed_token"`, `"name"`). Never the values: they are secrets.
     pub fn ensure_home_calendar(
         &self,
         feed_token: &str,
@@ -563,8 +507,6 @@ impl Db {
                  auth_hash = ?5, legacy_auth = 1 WHERE id = 'home'",
                 &[
                     Bind::Text(feed_token),
-                    // Overwrite the legacy plaintext too: a rotated-away key
-                    // must not linger in the file.
                     Bind::Text(&secret()),
                     Bind::Text(&key_hash),
                     Bind::Text(name),
@@ -595,8 +537,6 @@ impl Db {
             &[Bind::Text(calendar_id)],
             row_event,
         )?;
-        // Group once. Filtering the whole list per event is events x exceptions,
-        // and a feed render pays that while holding the database lock.
         let mut by_uid: HashMap<String, Vec<ExceptionRow>> = HashMap::new();
         for ex in self.list_exceptions(calendar_id, None)? {
             by_uid.entry(ex.uid.clone()).or_default().push(ex);
@@ -723,7 +663,6 @@ impl Db {
         Ok(saved)
     }
 
-    /// Replace the row with a seal and drop any plaintext exception rows.
     pub fn put_event_seal(
         &self,
         calendar_id: &str,
@@ -1207,16 +1146,6 @@ fn attach_exceptions(event: &mut EventRow, rows: &[ExceptionRow]) {
     }
 }
 
-/// All of it in one transaction. The rebuild below drops the old `events`
-/// table, and a failure between the drop and the rename used to leave the
-/// database with no events table (or a stray `events_new`) and every restart
-/// failing the same way.
-/// Add `key_hash` to a database from before keys were hashed, and fill it from
-/// the plaintext column.
-///
-/// The plaintext stays for now: leaving it lets the previous release still
-/// authenticate, so a bad deploy can be rolled back without locking everyone
-/// out. A later release scrubs it. A copy of the file is taken first.
 fn migrate_calendars(path: &Path, db: &Connection) -> Result<(), String> {
     if column_names(db, "calendars")?.iter().any(|c| c == "key_hash") {
         return Ok(());
@@ -1243,9 +1172,6 @@ fn migrate_feed_column(db: &Connection) -> Result<(), String> {
     db.execute_batch("ALTER TABLE calendars ADD COLUMN feed TEXT NOT NULL DEFAULT 'plain';")
 }
 
-/// 0.30.0: the auth token split from the write key. Existing rows keep
-/// accepting the raw key (`legacy_auth` 1) and get `auth_hash` on their next
-/// raw-key login.
 fn migrate_auth_columns(db: &Connection) -> Result<(), String> {
     let cols = column_names(db, "calendars")?;
     if !cols.iter().any(|c| c == "auth_hash") {
@@ -1265,13 +1191,6 @@ pub(crate) fn is_sha256_hex(s: &str) -> bool {
 }
 
 impl Db {
-    /// Blank the legacy plaintext `agent_key` column on every calendar.
-    ///
-    /// Auth has used `key_hash` alone since 0.8.0; the column was kept for one
-    /// release so a bad deploy could roll back. Once that release has proven
-    /// itself this removes the last copy of each key from the file. A snapshot
-    /// is taken first, and only if there is something to scrub. Returns how
-    /// many calendars were changed.
     pub fn scrub_legacy_keys(&self, path: &Path) -> Result<usize, String> {
         let pending = self
             .conn
@@ -1294,8 +1213,6 @@ impl Db {
     }
 }
 
-/// Copy the database file to `<path>.pre-<label>` before a migration that
-/// rewrites rows. Never overwrites an earlier snapshot.
 fn snapshot(path: &Path, label: &str) -> Result<(), String> {
     let mut target = path.as_os_str().to_owned();
     target.push(format!(".pre-{label}"));
@@ -1835,8 +1752,6 @@ pub fn json_calendar(row: &CalendarRow, base: &str) -> Value {
     ])
 }
 
-/// `json_calendar` plus the write key. Only for the create response: the key
-/// is not recoverable afterwards.
 pub fn json_calendar_created(row: &CalendarRow, key: &str, base: &str) -> Value {
     let mut value = json_calendar(row, base);
     if let Value::Object(map) = &mut value {
@@ -2067,8 +1982,6 @@ mod tests {
         assert!(cleared.is_err());
     }
 
-    // ---- transactions ------------------------------------------------------
-
     fn series(db: &Db, cal: &str) {
         db.upsert_event(
             cal,
@@ -2102,10 +2015,8 @@ mod tests {
             db.conn
                 .execute("DELETE FROM calendars WHERE id = ?1", &[Bind::Text(&cal_id)])
                 .unwrap();
-            // Dropped here without commit, as an early `?` or a panic would.
         }
         assert!(db.get_calendar(&cal_id).unwrap().is_some());
-        // A leaked open transaction would make this fail forever.
         db.conn.begin().unwrap().commit().unwrap();
     }
 
@@ -2193,15 +2104,12 @@ mod tests {
         assert_eq!((ev.summary.as_str(), ev.sequence), ("Note", 0));
     }
 
-    // ---- migration ---------------------------------------------------------
-
     fn scratch_path() -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("agentcloud-mig-{}", hex_encode(&random_bytes(8))));
         std::fs::create_dir_all(&dir).unwrap();
         dir.join("calendar.db")
     }
 
-    /// The layout before events had a `calendar_id`.
     fn legacy_db(path: &std::path::Path, with_sequence: bool) {
         let conn = Connection::open(path).unwrap();
         let sequence = if with_sequence { "sequence INTEGER NOT NULL DEFAULT 0," } else { "" };
@@ -2229,7 +2137,6 @@ mod tests {
         let ev = db.get_event("home", "old-1").unwrap().unwrap();
         assert_eq!(ev.summary, "Old");
         assert!(ev.rrule.is_empty());
-        // Idempotent.
         drop(db);
         assert_eq!(Db::open(&path).unwrap().list_events("home").unwrap().len(), 1);
     }
@@ -2237,8 +2144,6 @@ mod tests {
     #[test]
     fn a_failed_migration_leaves_the_old_data_untouched() {
         let path = scratch_path();
-        // No `sequence` column: the copy into events_new fails after
-        // events_new was created.
         legacy_db(&path, false);
         assert!(Db::open(&path).is_err());
         assert!(Db::open(&path).is_err(), "still failing the same way, not worse");
@@ -2254,8 +2159,6 @@ mod tests {
         let cols = column_names(&conn, "events").unwrap();
         assert!(!cols.contains(&"calendar_id".to_string()));
     }
-
-    // ---- key hashing -------------------------------------------------------
 
     fn snapshot_path(db: &std::path::Path) -> std::path::PathBuf {
         let mut name = db.as_os_str().to_owned();
@@ -2281,8 +2184,6 @@ mod tests {
         let db = Db::open(&path).unwrap();
         let cal = db.get_calendar("cal_old").unwrap().unwrap();
         assert_eq!(cal.key_hash, sha256_hex("old-key"));
-        // 0.30.0: no auth token yet, raw key still accepted. The first raw-key
-        // login records the token hash, then the token works on its own.
         assert!(cal.auth_hash.is_empty() && cal.legacy_auth);
         let token = crate::seal::auth_token("old-key");
         assert!(crate::server::calendar_auth(&db, "cal_old", &format!("Bearer {token}")).is_none());
@@ -2291,18 +2192,15 @@ mod tests {
         assert_eq!(cal.auth_hash, sha256_hex(&token));
         assert!(crate::server::calendar_auth(&db, "cal_old", &format!("Bearer {token}")).is_some());
 
-        // The plaintext is still there, so the previous release can run.
         let conn = Connection::open(&path).unwrap();
         let legacy = conn
             .query_row("SELECT agent_key FROM calendars WHERE id = 'cal_old'", &[], |r| r.text(0))
             .unwrap();
         assert_eq!(legacy.as_deref(), Some("old-key"));
 
-        // The snapshot is the file as it was: no key_hash column.
         let snap = Connection::open(snapshot_path(&path)).unwrap();
         assert!(!column_names(&snap, "calendars").unwrap().contains(&"key_hash".to_string()));
 
-        // A second open neither re-migrates nor overwrites the snapshot.
         drop(db);
         Db::open(&path).unwrap();
         let snap = Connection::open(snapshot_path(&path)).unwrap();
@@ -2323,8 +2221,6 @@ mod tests {
         assert_eq!(row.key_hash, sha256_hex(&key));
         assert_ne!(id, row.id);
 
-        // Nothing in the file holds the key: not the hash column, not the
-        // legacy one.
         let stored = db
             .conn
             .query_row(
@@ -2367,7 +2263,6 @@ mod tests {
         assert_eq!(db.get_calendar("cal_a").unwrap().unwrap().key_hash, sha256_hex("key-a"));
         assert_eq!(db.get_calendar(&fresh.id).unwrap().unwrap().key_hash, fresh.key_hash);
 
-        // The snapshot still holds what was there, in case it is needed.
         let mut snap = path.as_os_str().to_owned();
         snap.push(".pre-0.11.0");
         let snap = Connection::open(std::path::Path::new(&snap)).unwrap();
@@ -2376,11 +2271,8 @@ mod tests {
             .unwrap();
         assert_eq!(kept.as_deref(), Some("key-a"));
 
-        // Nothing left to do: no work, and no second snapshot to overwrite the first.
         assert_eq!(db.scrub_legacy_keys(&path).unwrap(), 0);
     }
-
-    // ---- home calendar -----------------------------------------------------
 
     #[test]
     fn home_follows_the_environment() {

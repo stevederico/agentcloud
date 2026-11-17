@@ -1,8 +1,3 @@
-//! Everything a calendar holds, as one document.
-//!
-//! The point is that nobody is locked in: a calendar can be read out whole,
-//! as JSON for a machine or Markdown for a person, with the one write key.
-
 use crate::db::{json_calendar, json_event, CalendarRow, EventRow};
 use crate::json::Value;
 use crate::notes::{json_note, NoteRow};
@@ -15,7 +10,6 @@ pub fn export_json(
     todos: &[TodoRow],
     notes: &[NoteRow],
 ) -> Value {
-    // The link fields describe hosts and tokens, which an export has no use for.
     let name = json_calendar(cal, "");
     let calendar = Value::object(&[
         ("id", Value::String(cal.id.clone())),
@@ -34,7 +28,6 @@ pub fn export_json(
     ])
 }
 
-/// One line: a newline in a title or summary would break the list around it.
 fn one_line(text: &str) -> String {
     text.split(['\r', '\n'])
         .map(str::trim)

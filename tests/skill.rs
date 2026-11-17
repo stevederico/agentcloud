@@ -1,6 +1,3 @@
-//! The agent skill lives in the repo so it changes with the API. These keep it
-//! honest: it must describe every resource, and it must never carry a secret.
-
 use std::fs;
 use std::path::PathBuf;
 
@@ -14,7 +11,6 @@ fn has_the_front_matter_a_skill_loader_needs() {
     let text = skill();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines[0], "---");
-    // However long the description grows, the block has to close.
     let close = lines
         .iter()
         .skip(1)
@@ -40,13 +36,11 @@ fn documents_every_resource_the_api_serves() {
             "the skill does not show how to use {kind}"
         );
     }
-    // The backup it tells an agent to run must exist and be runnable.
     assert!(text.contains("scripts/pull-export"), "the skill never mentions the backup script");
     let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/pull-export");
     use std::os::unix::fs::PermissionsExt;
     let mode = fs::metadata(&script).expect("scripts/pull-export exists").permissions().mode();
     assert!(mode & 0o111 != 0, "scripts/pull-export is not executable");
-    // The rules an agent trips over.
     for word in ["User-Agent", "PUT", "429", "shown once", "X-ALMANAC-SEAL"] {
         assert!(text.contains(word), "the skill never mentions {word}");
     }
@@ -70,7 +64,6 @@ fn documents_every_resource_the_api_serves() {
 #[test]
 fn carries_no_secret_and_no_hardcoded_calendar() {
     let text = skill();
-    // Keys and feed tokens are long runs of hex; a calendar id is `cal_` + 16 hex.
     let mut run = 0;
     for c in text.chars() {
         run = if c.is_ascii_hexdigit() && !c.is_ascii_uppercase() { run + 1 } else { 0 };
@@ -82,7 +75,6 @@ fn carries_no_secret_and_no_hardcoded_calendar() {
 
 #[test]
 fn every_skill_file_is_covered_by_these_checks() {
-    // A second file in the skill directory would escape the secret scan above.
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("skills/agentcloud");
     let names: Vec<String> = fs::read_dir(&dir)
         .unwrap()

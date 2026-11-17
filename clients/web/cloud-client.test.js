@@ -1,4 +1,3 @@
-// node --test clients/web/  (needs target/debug/agentcloud: cargo build)
 import { test, before, after } from "node:test"
 import assert from "node:assert/strict"
 import { spawn, execFileSync } from "node:child_process"

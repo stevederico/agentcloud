@@ -12,13 +12,11 @@ pub struct Config {
     pub agent_key: String,
     pub tls_key: String,
     pub tls_cert: String,
-    /// Passphrase for the database file. Empty leaves the file plaintext.
     pub db_key: String,
 }
 
 const DEFAULT_PORT: u16 = 18788;
 
-/// Load KEY=value pairs into the process env. Existing env wins. Symlinks are refused.
 pub fn load_env_file(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Ok(());
@@ -73,7 +71,6 @@ fn is_quoted(value: &str) -> bool {
         || (value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2)
 }
 
-/// Read runtime config. Empty secrets are allowed here; callers decide whether to seed home.
 pub fn read_config(env: &HashMap<String, String>) -> Config {
     let port_raw = env.get("PORT").map(String::as_str).unwrap_or("");
     let port = port_raw

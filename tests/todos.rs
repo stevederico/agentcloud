@@ -1,5 +1,3 @@
-//! Todos over the HTTP surface, in process through `handle()`.
-
 mod common;
 
 use agentcloud::http::Request;
@@ -9,8 +7,6 @@ use common::*;
 fn titles(v: &Value) -> Vec<String> {
     common::titles(v, "todos")
 }
-
-// ---- CRUD -------------------------------------------------------------------
 
 #[test]
 fn creates_reads_updates_and_deletes_a_todo() {
@@ -71,7 +67,6 @@ fn put_is_idempotent_and_keeps_fields_it_does_not_mention() {
     assert_eq!(text(&v, "description"), "passport");
     assert_eq!(field(&v, "priority"), &Value::Number(1));
 
-    // Clearing is explicit.
     let (_, v) = call(&app, &cal.key, "PUT", &item, Some(r#"{"title":"Pack bags","due":null,"description":""}"#));
     assert_eq!(field(&v, "due"), &Value::Null);
     assert_eq!(text(&v, "description"), "");
@@ -92,15 +87,12 @@ fn finishing_stamps_the_time_and_reopening_clears_it() {
     let stamped = text(&done, "completedAt").to_string();
     assert!(stamped.ends_with('Z'), "{stamped}");
 
-    // Saving it again while still done keeps the original time.
     let (_, again) = call(&app, &cal.key, "PUT", &item, Some(r#"{"title":"Do it well"}"#));
     assert_eq!(text(&again, "completedAt"), stamped);
 
     let (_, open) = call(&app, &cal.key, "PATCH", &item, Some(r#"{"done":false}"#));
     assert_eq!(field(&open, "completedAt"), &Value::Null);
 }
-
-// ---- validation -------------------------------------------------------------
 
 #[test]
 fn rejects_bad_input_with_a_400() {
@@ -147,8 +139,6 @@ fn wrong_methods_and_paths_are_404_even_without_a_key() {
     }
 }
 
-// ---- listing ----------------------------------------------------------------
-
 #[test]
 fn lists_open_first_then_by_due_with_undated_last_and_filters() {
     let app = app();
@@ -172,8 +162,6 @@ fn lists_open_first_then_by_due_with_undated_last_and_filters() {
     assert_eq!(list("?tag=none"), Vec::<String>::new());
 }
 
-// ---- one key, isolation -----------------------------------------------------
-
 #[test]
 fn one_key_writes_events_and_todos_and_nothing_crosses_calendars() {
     let app = app();
@@ -186,7 +174,6 @@ fn one_key_writes_events_and_todos_and_nothing_crosses_calendars() {
     assert_eq!(call(&app, &a.key, "PUT", &event, Some(ev)).0, 201);
     assert_eq!(call(&app, &a.key, "PUT", &todo, Some(r#"{"title":"Floss"}"#)).0, 201);
 
-    // A's key is nothing on B, for either resource.
     for path in [format!("/v1/c/{}/todos", b.id), format!("/v1/c/{}/events", b.id)] {
         assert_eq!(call(&app, &a.key, "GET", &path, None).0, 401, "{path}");
     }
@@ -194,10 +181,8 @@ fn one_key_writes_events_and_todos_and_nothing_crosses_calendars() {
     assert_eq!(call(&app, "", "GET", &format!("/v1/c/{}/todos", a.id), None).0, 401);
     assert_eq!(call(&app, "wrong", "GET", &format!("/v1/c/{}/todos", a.id), None).0, 401);
 
-    // B sees none of A's todos even with its own key.
     let (_, list) = call(&app, &b.key, "GET", &format!("/v1/c/{}/todos", b.id), None);
     assert!(titles(&list).is_empty());
-    // Same uid on two calendars is two todos.
     assert_eq!(call(&app, &b.key, "PUT", &format!("/v1/c/{}/todos/t1", b.id), Some(r#"{"title":"B's"}"#)).0, 201);
     assert_eq!(text(&call(&app, &a.key, "GET", &todo, None).1, "title"), "Floss");
 }
@@ -211,13 +196,10 @@ fn the_home_calendar_has_short_todo_routes() {
     assert_eq!(titles(&list), ["Mine"]);
     assert_eq!(text(&call(&app, HOME_KEY, "GET", "/v1/c/home/todos/h1", None).1, "title"), "Mine");
     assert_eq!(call(&app, "wrong", "GET", "/v1/todos", None).0, 401);
-    // The home owner reads the feed URLs from the calendar info.
     let (_, info) = call(&app, HOME_KEY, "GET", "/v1/c/home", None);
     assert!(text(field(&info, "todos"), "subscribe").contains("/feed/"));
     assert!(info.get("key").is_none());
 }
-
-// ---- limits -----------------------------------------------------------------
 
 #[test]
 fn the_todo_cap_holds_for_strangers_but_not_for_home_or_replacements() {
@@ -229,9 +211,7 @@ fn the_todo_cap_holds_for_strangers_but_not_for_home_or_replacements() {
     assert_eq!(call(&app, &cal.key, "POST", &coll, Some(r#"{"title":"b"}"#)).0, 201);
     assert_eq!(call(&app, &cal.key, "POST", &coll, Some(r#"{"title":"c"}"#)).0, 409);
     assert_eq!(call(&app, &cal.key, "PUT", &format!("{coll}/c"), Some(r#"{"title":"c"}"#)).0, 409);
-    // Replacing one that exists is not adding.
     assert_eq!(call(&app, &cal.key, "PUT", &format!("{coll}/a"), Some(r#"{"title":"a2"}"#)).0, 200);
-    // Freeing a slot frees the cap.
     assert_eq!(call(&app, &cal.key, "DELETE", &format!("{coll}/a"), None).0, 204);
     assert_eq!(call(&app, &cal.key, "POST", &coll, Some(r#"{"title":"c"}"#)).0, 201);
 
@@ -257,13 +237,9 @@ fn events_and_todos_spend_one_write_budget() {
     );
     assert_eq!(status, 429);
     assert!(res.header_value("retry-after").is_some());
-    // Reads stay free.
     assert_eq!(call(&app, &cal.key, "GET", &format!("/v1/c/{}/todos", cal.id), None).0, 200);
-    // A stranger cannot spend the owner's budget.
     assert_eq!(call(&app, "wrong", "PUT", &format!("/v1/c/{}/todos/t3", cal.id), Some(r#"{"title":"z"}"#)).0, 401);
 }
-
-// ---- feeds ------------------------------------------------------------------
 
 #[test]
 fn the_todos_feed_holds_only_todos_and_the_calendar_feed_only_events() {
@@ -293,7 +269,6 @@ fn the_todos_feed_holds_only_todos_and_the_calendar_feed_only_events() {
     assert!(ics.contains("STATUS:NEEDS-ACTION\r\n"));
     assert!(ics.ends_with("END:VCALENDAR\r\n"));
 
-    // The events feed (from the create response) is unchanged and has no todos.
     let (_, info) = call(&app, &cal.key, "GET", &format!("/v1/c/{}", cal.id), None);
     let events_feed = text(&info, "subscribe").strip_prefix(BASE).unwrap().to_string();
     let (status, events_ics, _) = send(&app, Request::new("GET", &events_feed));
@@ -315,7 +290,6 @@ fn feed_tokens_are_stable_unguessable_and_per_calendar() {
     for path in ["/feed/nope.ics", "/feed/.ics", "/feed/", &format!("{}x", a.todos_feed_path)] {
         assert_eq!(send(&app, Request::new("GET", path)).0, 404, "{path}");
     }
-    // Only reads are allowed on a feed.
     assert_eq!(send(&app, Request::new("POST", &a.todos_feed_path)).0, 404);
     let (status, body, res) = send(&app, Request::new("HEAD", &a.todos_feed_path));
     assert_eq!(status, 200);
@@ -330,7 +304,6 @@ fn a_calendar_that_predates_todos_gets_a_feed_on_first_ask() {
     assert_eq!(status, 200);
     let path = text(field(&info, "todos"), "subscribe").strip_prefix(BASE).unwrap().to_string();
     assert_eq!(send(&app, Request::new("GET", &path)).0, 200);
-    // The home calendar's own event feed keeps working with its env token.
     assert_eq!(send(&app, Request::new("GET", &format!("/feed/{HOME_FEED}.ics"))).0, 200);
 }
 

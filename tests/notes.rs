@@ -1,5 +1,3 @@
-//! Notes over the HTTP surface, in process through `handle()`.
-
 mod common;
 
 use agentcloud::http::Request;
@@ -9,8 +7,6 @@ use common::*;
 fn titles(v: &Value) -> Vec<String> {
     common::titles(v, "notes")
 }
-
-// ---- CRUD -------------------------------------------------------------------
 
 #[test]
 fn creates_reads_updates_and_deletes_a_note() {
@@ -86,8 +82,6 @@ fn a_list_leaves_the_bodies_out_unless_asked() {
     assert_eq!(text(&field(&full, "notes").as_array().unwrap()[0], "body"), "hello");
 }
 
-// ---- validation -------------------------------------------------------------
-
 #[test]
 fn rejects_bad_input_with_a_400() {
     let app = app();
@@ -115,7 +109,6 @@ fn rejects_bad_input_with_a_400() {
     let (_, list) = call(&app, &cal.key, "GET", &coll, None);
     assert!(titles(&list).is_empty(), "nothing was created");
 
-    // The largest body that fits is accepted.
     let biggest = format!(r#"{{"title":"x","body":"{}"}}"#, "y".repeat(32 * 1024));
     assert_eq!(call(&app, &cal.key, "POST", &coll, Some(&biggest)).0, 201);
 }
@@ -135,8 +128,6 @@ fn wrong_methods_and_paths_are_404_even_without_a_key() {
         assert_eq!(send(&app, Request::new(m, &p)).0, 404, "{m} {p}");
     }
 }
-
-// ---- listing and search -----------------------------------------------------
 
 #[test]
 fn lists_pinned_first_then_newest_and_filters_by_tag() {
@@ -189,14 +180,10 @@ fn search_matches_title_or_body_and_treats_wildcards_and_quotes_literally() {
     assert_eq!(find("c%3A%5Cdir"), ["Path"], "a backslash is literal");
     assert_eq!(find("%27%3B%20DROP%20TABLE%20notes%3B--"), Vec::<String>::new());
     assert_eq!(find("nothing"), Vec::<String>::new());
-    // The table survived the injection attempt.
     assert_eq!(titles(&call(&app, &cal.key, "GET", &coll, None).1).len(), 7);
-    // An empty q is no filter; an oversized one is refused.
     assert_eq!(find("").len(), 7);
     assert_eq!(call(&app, &cal.key, "GET", &format!("{coll}?q={}", "x".repeat(201)), None).0, 400);
 }
-
-// ---- one key, isolation, limits ---------------------------------------------
 
 #[test]
 fn one_key_writes_everything_and_nothing_crosses_calendars() {
@@ -261,8 +248,6 @@ fn events_todos_and_notes_spend_one_write_budget() {
     assert_eq!(call(&app, &cal.key, "GET", &format!("/v1/c/{}/notes", cal.id), None).0, 200);
 }
 
-// ---- feed -------------------------------------------------------------------
-
 #[test]
 fn the_notes_feed_is_atom_and_holds_only_notes() {
     let app = app();
@@ -290,7 +275,6 @@ fn the_notes_feed_is_atom_and_holds_only_notes() {
     assert!(!xml.contains("Dentist") && !xml.contains("Floss"));
     assert!(xml.trim_end().ends_with("</feed>"));
 
-    // Its token is its own, and the .ics spelling of it also works.
     assert_ne!(cal.notes_feed_path, cal.todos_feed_path);
     assert_ne!(cal.notes_feed_path, cal.events_feed_path);
     let as_ics = cal.notes_feed_path.replace(".atom", ".ics");
@@ -298,7 +282,6 @@ fn the_notes_feed_is_atom_and_holds_only_notes() {
     assert_eq!(send(&app, Request::new("GET", &format!("{}x", cal.notes_feed_path))).0, 404);
     assert_eq!(send(&app, Request::new("POST", &cal.notes_feed_path)).0, 404);
 
-    // The other two feeds never carry notes.
     let (_, ics, _) = send(&app, Request::new("GET", &cal.todos_feed_path));
     assert!(!ics.contains("R&D") && !ics.contains("VJOURNAL"));
     let (_, ics, _) = send(&app, Request::new("GET", &cal.events_feed_path));

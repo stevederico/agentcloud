@@ -15,8 +15,6 @@ use agentcloud::json::{stringify, Value};
 use agentcloud::server::{handle, AppState};
 use agentcloud::time::now_iso;
 
-/// Empty the trash of items deleted more than `TRASH_DAYS` ago, at boot and
-/// every 6 hours.
 fn spawn_trash_purge(db: Arc<std::sync::Mutex<Db>>) {
     std::thread::spawn(move || loop {
         let cutoff = agentcloud::time::days_ago_iso(agentcloud::sync::TRASH_DAYS);
@@ -52,8 +50,6 @@ fn main() {
         }
     }
     if args.first().map(String::as_str) == Some("stats") {
-        // `agentcloud stats --db PATH`: row counts of a (possibly encrypted)
-        // database, for the restore test. `DB_KEY` from the environment.
         let path = match args.get(1..3) {
             Some([flag, path]) if flag == "--db" => path.clone(),
             _ => {
@@ -113,8 +109,6 @@ fn main() {
             }
         }
     }
-    // One-shot: drop the last plaintext copy of every write key. Off unless asked,
-    // because it ends the option of rolling back to a build older than 0.8.0.
     if matches!(
         std::env::var("SCRUB_LEGACY_KEYS").as_deref(),
         Ok("1" | "true" | "yes")
@@ -134,7 +128,6 @@ fn main() {
             }
         }
     }
-    // Copies of the database on a timer; BACKUP_INTERVAL_HOURS=0 turns it off.
     spawn_backups(
         Path::new(&cfg.db_path).to_path_buf(),
         BackupConfig::from_env(&cfg.db_path, |k| std::env::var(k).ok()),
@@ -143,8 +136,6 @@ fn main() {
     let public_base = std::env::var("PUBLIC_BASE").unwrap_or_default();
     let mut state = AppState::new(db, public_base);
     spawn_trash_purge(state.db.clone());
-    // TRUSTED_PROXY_HOPS sets which X-Forwarded-For entry counts as the
-    // client; the rest tune the caps. See `limits::Limits`.
     state.limits = state.limits.from_env(|k| std::env::var(k).ok());
     let binds = listen_hosts(&cfg.host);
     let mut listeners = Vec::new();
@@ -183,18 +174,10 @@ fn main() {
     }
 }
 
-/// Longest a client may go silent between reads.
 const READ_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Total time a client gets to deliver a whole request, headers and body.
-///
-/// Every response sends `connection: close` and one request is served per
-/// connection, so no legitimate client holds a socket open waiting. `READ_TIMEOUT`
-/// alone is per `read()`: a client sending one byte every nine seconds never
-/// trips it and pins its thread. This budget does not reset.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(15);
 
-/// A reader whose timeout shrinks toward a fixed deadline.
 struct DeadlineReader {
     stream: TcpStream,
     deadline: Instant,
@@ -211,22 +194,10 @@ impl Read for DeadlineReader {
     }
 }
 
-/// Give up on a client that will not accept its response.
-///
-/// Generous compared to the read side: an ICS feed can be large and the client
-/// on a slow mobile link.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Refuse new connections past this many in flight.
-///
-/// One thread per connection, so this bounds thread and fd use under a flood.
-/// Roomy for a personal calendar sitting behind a proxy.
 const MAX_CONNECTIONS: usize = 512;
 
-/// Decrements the live-connection count when a worker finishes.
-///
-/// A guard rather than a bare decrement so the slot is released on panic too --
-/// `read_request` and `handle` both run inside the worker.
 struct ConnectionGuard(Arc<AtomicUsize>);
 
 impl Drop for ConnectionGuard {
@@ -240,7 +211,6 @@ fn accept_loop(listener: TcpListener, state: AppState) {
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
 
-        // Reserve the slot before spawning, so a burst cannot overshoot.
         let taken = live.fetch_add(1, Ordering::SeqCst) + 1;
         if taken > MAX_CONNECTIONS {
             live.fetch_sub(1, Ordering::SeqCst);
@@ -268,8 +238,6 @@ fn serve(stream: TcpStream, state: &AppState) {
         .map(|a| a.ip().to_string())
         .unwrap_or_default();
 
-    // Was `.expect("clone")`, which panicked the worker on fd exhaustion --
-    // exactly the state a connection flood reaches.
     let Ok(read_half) = stream.try_clone() else {
         eprintln!("agentcloud: could not clone stream, dropping connection");
         return;
@@ -285,9 +253,6 @@ fn serve(stream: TcpStream, state: &AppState) {
     let res = match read_request_with(&mut reader, &mut go_ahead) {
         Ok(mut req) => {
             req.peer = peer;
-            // A panic in a handler answers 500 instead of dropping the socket
-            // with no reply. The DB lock recovers from poisoning, so the next
-            // request is fine.
             catch_unwind(AssertUnwindSafe(|| handle(state, &req))).unwrap_or_else(|_| {
                 eprintln!("agentcloud: handler panicked: {} {}", req.method, req.path);
                 json_response(500, r#"{"error":"internal error"}"#)
@@ -298,8 +263,6 @@ fn serve(stream: TcpStream, state: &AppState) {
             json_response(status, &format!(r#"{{"error":"{msg}"}}"#))
         }
         Err(ReadError::Closed(why)) => {
-            // Nothing logged this before: a stalled connection produced no
-            // output at all, so a flood looked like a silent, idle server.
             eprintln!("agentcloud: dropping connection from {peer}: {why}");
             return;
         }
@@ -308,7 +271,6 @@ fn serve(stream: TcpStream, state: &AppState) {
     let _ = write_response(&mut writer, &res);
 }
 
-/// Loopback hostnames must listen on v4 and v6. `localhost` prefers ::1.
 fn listen_hosts(host: &str) -> Vec<String> {
     if host == "localhost" || host == "127.0.0.1" || host == "::1" {
         vec!["127.0.0.1".into(), "::1".into()]

@@ -1,5 +1,3 @@
-//! Revisions, the changes feed, the trash, and If-Match (0.31.0).
-
 mod common;
 
 use agentcloud::http::Request;
@@ -97,7 +95,6 @@ fn a_deleted_item_can_be_restored_from_the_trash() {
     assert!(rev_of(&back) > before);
     let (_, trash) = call(&app, &cal.key, "GET", &format!("{base}/trash"), None);
     assert!(field(&trash, "items").as_array().unwrap().is_empty());
-    // Live again, so a second restore has nothing to bring back over it.
     assert_eq!(call(&app, &cal.key, "POST", &format!("{base}/todos/t1/restore"), None).0, 409);
     assert_eq!(call(&app, &cal.key, "POST", &format!("{base}/todos/never/restore"), None).0, 404);
 }
@@ -110,7 +107,6 @@ fn restoring_over_a_live_uid_is_refused() {
     put_note(&app, &cal, "n", "Old", None);
     call(&app, &cal.key, "DELETE", &format!("{base}/notes/n"), None);
     put_note(&app, &cal, "n", "New", None);
-    // The new note took the uid, which also cleared the old one from the trash.
     assert_eq!(call(&app, &cal.key, "POST", &format!("{base}/notes/n/restore"), None).0, 409);
 }
 
@@ -148,13 +144,11 @@ fn if_match_refuses_a_stale_write() {
     let cal = create(&app);
     let (_, first) = put_note(&app, &cal, "n", "Draft", None);
     let seen = rev_of(&first).to_string();
-    // Another device saves in between.
     put_note(&app, &cal, "n", "Theirs", None);
     let (status, conflict) = put_note(&app, &cal, "n", "Mine", Some(&format!("\"{seen}\"")));
     assert_eq!(status, 412);
     assert_eq!(field(&conflict, "deleted").as_bool(), Some(false));
     assert_eq!(text(field(&conflict, "current"), "title"), "Theirs");
-    // With the current rev it goes through.
     let current = rev_of(field(&conflict, "current")).to_string();
     let (status, saved) = put_note(&app, &cal, "n", "Mine", Some(&current));
     assert_eq!(status, 200);
@@ -213,7 +207,6 @@ fn purging_old_trash_expires_older_cursors() {
     let (_, n) = put_note(&app, &cal, "n", "A", None);
     let cursor = rev_of(&n);
     call(&app, &cal.key, "DELETE", &format!("{base}/notes/n"), None);
-    // A cutoff in the future purges everything deleted so far.
     let removed = app.db.lock().unwrap().purge_trash("9999-01-01T00:00:00.000Z").unwrap();
     assert_eq!(removed, 1);
     let (status, _) = call(&app, &cal.key, "GET", &format!("{base}/changes?since={cursor}"), None);
@@ -224,8 +217,6 @@ fn purging_old_trash_expires_older_cursors() {
 
 #[test]
 fn a_cursor_past_the_counter_is_410() {
-    // A client that synced before a restore from backup holds a rev the
-    // server has not reached again. A delta would skip the reused revs.
     let app = app();
     let cal = create(&app);
     put_note(&app, &cal, "n1", "One", None);

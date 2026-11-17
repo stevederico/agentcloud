@@ -1,46 +1,22 @@
-# Agent Cloud shell client library. Source it; do not run it.
-# Copied into each Omarchy app; this file in the agentcloud repo is the source.
-#
-#   . "$(dirname "$0")/cloud-lib.sh"
-#   cloud_load [CAL_ID] || exit       # sets CLOUD_ID, CLOUD_ROOT, CLOUD_TOKEN
-#   out=$(cloud_tmp)
-#   code=$(cloud_curl GET "$CLOUD_ROOT/notes" "$out")
-#
-# The write key never enters a shell variable, argv, or a log. Requests carry
-# the auth token, SHA-256(key + "almanac-auth-v1"), passed to curl on stdin
-# (`-K -`), so `ps` cannot see it either. Temp files live in one private
-# directory that is removed on exit. ("almanac-auth-v1" is the wire format and
-# must not be renamed.)
-#
-# Env (first set wins): CLOUD_CONFIG, AGENTCLOUD_CONFIG, ALMANAC_CONFIG
-# (credentials file); CLOUD_BASE, AGENTCLOUD_BASE, ALMANAC_BASE; CLOUD_UA,
-# AGENTCLOUD_UA, ALMANAC_UA; AGENTCLOUD_BIN, ALMANAC_BIN. The ALMANAC_* names are read only
-# for installs from before the rename.
-
 _cloud_cfg="${XDG_CONFIG_HOME:-$HOME/.config}"
 CLOUD_CONFIG="${CLOUD_CONFIG:-${AGENTCLOUD_CONFIG:-${ALMANAC_CONFIG-}}}"
 if [[ -z $CLOUD_CONFIG ]]; then
   CLOUD_CONFIG="$_cloud_cfg/agentcloud/hosted-calendars.json"
-  # Installs from before the rename keep their credentials in ~/.config/almanac.
   if [[ ! -f $CLOUD_CONFIG && -f $_cloud_cfg/almanac/hosted-calendars.json ]]; then
     CLOUD_CONFIG="$_cloud_cfg/almanac/hosted-calendars.json"
   fi
 fi
 unset _cloud_cfg
-# Set when the caller chose a server; otherwise the credentials' write URL
-# decides, with the old almanac.dottie.ai host moved to the Agent Cloud host.
 CLOUD_BASE_SET="${CLOUD_BASE:+1}${AGENTCLOUD_BASE:+1}${ALMANAC_BASE:+1}"
 CLOUD_BASE="${CLOUD_BASE:-${AGENTCLOUD_BASE:-${ALMANAC_BASE:-https://cloud.bixbyapps.com}}}"
 CLOUD_UA="${CLOUD_UA:-${AGENTCLOUD_UA:-${ALMANAC_UA:-Mozilla/5.0 agentcloud-omarchy}}}"
 CLOUD_TMPDIR=""
 
-# A new temp file in this run's private directory (made by cloud_load).
 cloud_tmp() {
   [[ -n $CLOUD_TMPDIR && -d $CLOUD_TMPDIR ]] || return 1
   mktemp "$CLOUD_TMPDIR/f.XXXXXX"
 }
 
-# Must run in the script's own shell, not in $(...): it sets the trap.
 _cloud_init_tmp() {
   [[ -n $CLOUD_TMPDIR ]] && return 0
   CLOUD_TMPDIR=$(mktemp -d "${XDG_RUNTIME_DIR:-${TMPDIR:-/tmp}}/agentcloud.XXXXXX") || return 1
@@ -51,8 +27,6 @@ _cloud_init_tmp() {
   trap "rm -rf '$CLOUD_TMPDIR'${prev:+; $prev}" EXIT
 }
 
-# Read the calendar from the credentials file and make the private temp dir.
-# Call it directly (not in $(...)). Prints nothing secret.
 cloud_load() {
   local want="${1-}" out
   [[ -f $CLOUD_CONFIG ]] || return 1
@@ -91,10 +65,6 @@ PY
   [[ -n $CLOUD_ID && -n $CLOUD_TOKEN ]]
 }
 
-# cloud_curl METHOD URL OUTFILE [BODYFILE] [IF_MATCH_REV] -> prints the HTTP code.
-# A 401 on a calendar from before 0.30.0 is retried once after a raw-key
-# request teaches the server the token. The key goes from the file to curl's
-# stdin inside python, never through the shell.
 cloud_curl() {
   local method="$1" url="$2" out="$3" body="${4-}" rev="${5-}" code
   code=$(_cloud_curl_token "$method" "$url" "$out" "$body" "$rev") || return 1
@@ -129,7 +99,6 @@ PY
   [[ $code == 200 ]]
 }
 
-# `feed` of the calendar: seal or plain.
 cloud_feed() {
   local out code
   out=$(cloud_tmp) || return 1
@@ -142,7 +111,6 @@ _cloud_supports_seal() {
   [[ -x $1 ]] && LC_ALL=C grep -aq 'almanac-auth-v1' "$1"
 }
 
-# The agentcloud binary (or an older almanac 0.30.0+ build), for sealed calendars.
 cloud_bin() {
   local b
   for b in "${AGENTCLOUD_BIN-}" "${ALMANAC_BIN-}" \
@@ -158,10 +126,6 @@ cloud_bin() {
   return 1
 }
 
-# cloud_open KIND < json > json
-# Opens every sealed item in a response: one item, a list under "events",
-# "todos" or "notes", or a changes feed. Plain items pass through. Server
-# fields (uid, rev, createdAt, updatedAt) are kept; `sealed: true` is added.
 cloud_open() {
   local kind="$1" bin
   bin=$(cloud_bin) || bin=""
@@ -202,8 +166,6 @@ sys.stdout.write("\n")
 '
 }
 
-# cloud_seal_body KIND UID PLAIN_JSON_FILE OUT_FILE: writes {"seal": "alm1..."}.
-# Server fields in the plain JSON are dropped before sealing.
 cloud_seal_body() {
   local kind="$1" uid="$2" plain="$3" out="$4" bin clean
   bin=$(cloud_bin) || return 1
@@ -215,7 +177,6 @@ for k in ("uid", "seal", "rev", "sequence", "createdAt", "updatedAt", "sealed", 
     d.pop(k, None)
 json.dump(d, open(sys.argv[2], "w"))' "$plain" "$clean" || return 1
   local wire
-  # Not a pipe: a failed seal must fail here, not write {"seal": ""}.
   wire=$(AGENTCLOUD_CREDS="$CLOUD_CONFIG" ALMANAC_CREDS="$CLOUD_CONFIG" "$bin" seal --cal "$CLOUD_ID" --kind "$kind" --uid "$uid" <"$clean") || return 1
   [[ $wire == alm1.* ]] || return 1
   printf '%s' "$wire" |
@@ -223,7 +184,6 @@ json.dump(d, open(sys.argv[2], "w"))' "$plain" "$clean" || return 1
   [[ -s $out ]]
 }
 
-# The `error` text of a JSON error body, or nothing.
 cloud_error() {
   python3 -c 'import json,sys
 try:

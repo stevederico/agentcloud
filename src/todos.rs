@@ -1,9 +1,3 @@
-//! Todos: storage, input parsing, JSON, and the HTTP routes.
-//!
-//! They live in the same database as events, keyed by calendar id, so the one
-//! write key for a calendar covers them too. The feed is a `VTODO` calendar
-//! behind its own token (see `Db::feed_token`), separate from the event feed.
-
 use crate::db::{is_uid, CalendarRow, Db};
 use crate::http::{json_response, Request, Response};
 use crate::json::{stringify, Value};
@@ -22,12 +16,9 @@ pub struct TodoRow {
     pub uid: String,
     pub title: String,
     pub description: String,
-    /// `""` for none, `YYYY-MM-DD` for a day, else a UTC instant.
     pub due: String,
-    /// RFC 5545: 0 undefined, 1 highest .. 9 lowest.
     pub priority: i64,
     pub done: bool,
-    /// `""` unless done.
     pub completed_at: String,
     pub tags: Vec<String>,
     pub sequence: i64,
@@ -37,8 +28,6 @@ pub struct TodoRow {
     pub rev: i64,
 }
 
-/// What a write may set. `None` leaves the stored value alone; for text fields
-/// `Some("")` clears it.
 #[derive(Debug, Default)]
 pub struct TodoFields {
     pub uid: Option<String>,
@@ -81,7 +70,6 @@ pub(crate) fn migrate(conn: &Connection) -> Result<(), String> {
     Ok(())
 }
 
-/// Tags are stored as `,a,b,` so every one is delimited on both sides.
 pub(crate) fn pack_tags(tags: &[String]) -> String {
     if tags.is_empty() {
         String::new()
@@ -135,7 +123,6 @@ impl Db {
         )
     }
 
-    /// Open items first, then by due date with undated last, then oldest.
     pub fn list_todos(&self, calendar_id: &str, done: Option<bool>) -> Result<Vec<TodoRow>, String> {
         let filter = match done {
             Some(true) => " AND done = 1 AND seal = ''",
@@ -152,8 +139,6 @@ impl Db {
         )
     }
 
-    /// Create or update. Returns the saved row and whether it was created.
-    /// `uid` of `None` mints one.
     pub fn upsert_todo(
         &self,
         calendar_id: &str,
@@ -282,7 +267,6 @@ impl Db {
         Ok((saved, created))
     }
 
-    /// Change only the fields present. `Err("not found")` if there is no such todo.
     pub fn patch_todo(
         &self,
         calendar_id: &str,
@@ -339,9 +323,6 @@ impl Db {
         Ok(removed > 0)
     }
 
-    /// The feed token for one of a calendar's extra feeds (`"todos"`),
-    /// minted on first use. Each kind has its own so a leaked token exposes
-    /// one feed, not all of them.
     pub fn feed_token(&self, calendar_id: &str, kind: &str) -> Result<String, String> {
         const FIND: &str = "SELECT token FROM feeds WHERE calendar_id = ?1 AND kind = ?2";
         let binds = [Bind::Text(calendar_id), Bind::Text(kind)];
@@ -357,7 +338,6 @@ impl Db {
             .ok_or_else(|| "failed to create feed".to_string())
     }
 
-    /// Which calendar and kind a feed token belongs to.
     pub fn feed_target(&self, token: &str) -> Result<Option<(String, String)>, String> {
         self.conn.query_row(
             "SELECT calendar_id, kind FROM feeds WHERE token = ?1",
@@ -367,8 +347,6 @@ impl Db {
     }
 }
 
-/// `completed_at` for a todo about to be saved. Finishing stamps the time;
-/// staying finished keeps the original; reopening clears it.
 fn completion(done: bool, existing: Option<&TodoRow>, now: &str) -> String {
     if !done {
         return String::new();
@@ -379,10 +357,6 @@ fn completion(done: bool, existing: Option<&TodoRow>, now: &str) -> String {
     }
 }
 
-// ---- input --------------------------------------------------------------------
-
-/// Parse a todo body. A full body (`partial` false) needs a `title`; a patch
-/// needs at least one field. Wrong types are errors, never silently dropped.
 pub fn parse_todo_fields(body: &Value, partial: bool) -> Result<TodoFields, String> {
     let obj = body.as_object().ok_or("body must be an object")?;
     let mut fields = TodoFields::default();
@@ -457,7 +431,6 @@ pub fn parse_todo_fields(body: &Value, partial: bool) -> Result<TodoFields, Stri
     Ok(fields)
 }
 
-/// `""` clears, a date stays a date, anything else becomes a UTC instant.
 fn parse_due(value: &str) -> Result<String, String> {
     if value.is_empty() || is_ymd(value) {
         return Ok(value.to_string());
@@ -465,7 +438,6 @@ fn parse_due(value: &str) -> Result<String, String> {
     parse_instant(value).ok_or_else(|| "due must be YYYY-MM-DD or an ISO-8601 datetime".to_string())
 }
 
-/// Lowercased, deduplicated, `[a-z0-9_-]{1,32}`, at most ten.
 pub(crate) fn parse_tags(items: &[Value]) -> Result<Vec<String>, String> {
     let mut tags: Vec<String> = Vec::new();
     for item in items {
@@ -530,9 +502,6 @@ fn json_todo_fields(row: &TodoRow) -> Value {
     ])
 }
 
-// ---- routes -------------------------------------------------------------------
-
-/// `/v1/c/{id}/todos` (no uid) and `/v1/c/{id}/todos/{uid}`. `/v1/todos` is `home`.
 pub(crate) fn route(
     state: &AppState,
     req: &Request,
@@ -589,9 +558,7 @@ fn get(state: &AppState, cal: &CalendarRow, uid: &str) -> Response {
     }
 }
 
-/// POST (no uid in the path) and PUT (uid from the path).
 fn write(state: &AppState, req: &Request, cal: &CalendarRow, path_uid: Option<&str>) -> Response {
-    // Parse before taking the lock: a slow body must not stall other requests.
     let body = match parse_body(req) {
         Ok(v) => v,
         Err(e) => return json_err(400, &e),

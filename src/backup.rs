@@ -1,11 +1,3 @@
-//! Periodic copies of the database.
-//!
-//! One SQLite file holds every calendar, so it is worth a copy the service
-//! makes itself. `VACUUM INTO` writes a consistent snapshot through a second
-//! connection while the server keeps running. The copy uses the same `DB_KEY`,
-//! so an encrypted database stays encrypted. These land on the same volume, so
-//! they cover a bad deploy or a corrupted file, not losing the volume.
-
 use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
@@ -13,27 +5,19 @@ use std::time::Duration;
 use crate::sqlite::Connection;
 use crate::time::now_iso;
 
-// Kept from before the Agent Cloud rename: pruning and the restore test find
-// existing copies by this prefix.
 const PREFIX: &str = "almanac-";
 const SUFFIX: &str = ".db";
 
-/// Wait this long after boot before the first copy, so startup traffic and a
-/// crash-looping container do not each pay for one.
 const FIRST_DELAY: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupConfig {
     pub dir: PathBuf,
-    /// `0` turns backups off.
     pub interval_hours: u64,
     pub keep: usize,
 }
 
 impl BackupConfig {
-    /// Read `BACKUP_DIR`, `BACKUP_INTERVAL_HOURS` and `BACKUP_KEEP`. The
-    /// directory defaults to `backups/` beside the database, which is on the
-    /// same volume. Unset or unparseable values keep the defaults.
     pub fn from_env(db_path: &str, get: impl Fn(&str) -> Option<String>) -> Self {
         fn num<T: std::str::FromStr>(raw: Option<String>) -> Option<T> {
             raw?.trim().parse().ok()
@@ -56,8 +40,6 @@ impl BackupConfig {
     }
 }
 
-/// Write one snapshot into `dir` and prune all but the newest `keep`.
-/// Returns the new file's path.
 pub fn run_once(
     db_path: &Path,
     dir: &Path,
@@ -75,7 +57,6 @@ pub fn run_once(
     Ok(target)
 }
 
-/// Delete all but the newest `keep` backups. Names sort by timestamp.
 fn prune(dir: &Path, keep: usize) -> Result<(), String> {
     let mut names: Vec<String> = std::fs::read_dir(dir)
         .map_err(|e| format!("read {}: {e}", dir.display()))?
@@ -91,8 +72,6 @@ fn prune(dir: &Path, keep: usize) -> Result<(), String> {
     Ok(())
 }
 
-/// Run `run_once` on a timer for the life of the process. Failures are logged,
-/// never fatal: a full disk must not take the calendar down with it.
 pub fn spawn(db_path: PathBuf, cfg: BackupConfig, key: Option<String>) {
     if cfg.interval_hours == 0 {
         return;
@@ -146,7 +125,6 @@ mod tests {
         let mut made = Vec::new();
         for _ in 0..5 {
             made.push(run_once(&db_path, &backups, 3, None).unwrap());
-            // Names carry milliseconds, so stay apart from the previous one.
             thread::sleep(Duration::from_millis(3));
         }
         let left: Vec<_> = std::fs::read_dir(&backups)

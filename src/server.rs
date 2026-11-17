@@ -25,8 +25,6 @@ pub struct AppState {
     pub public_base: String,
     pub limits: Limits,
     pub limiter: Arc<Limiter>,
-    /// Held across an item write, from the `If-Match` check to the write, so
-    /// two writers that read the same rev cannot both pass. Taken before `db`.
     pub item_writes: Arc<Mutex<()>>,
 }
 
@@ -42,12 +40,6 @@ impl AppState {
     }
 }
 
-/// Lock the database, surviving a poisoned mutex.
-///
-/// A panic while a handler held the guard used to poison it, and every later
-/// `.expect("db")` then panicked too: one bad request took every DB route down
-/// until a restart. The connection holds no half-applied state we rely on, so
-/// recovering the guard is safe.
 pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Db> {
     state.db.lock().unwrap_or_else(|e| e.into_inner())
 }
@@ -108,8 +100,6 @@ fn dispatch(state: &AppState, req: &Request) -> Response {
     }
 }
 
-/// Same status and headers as the GET, no body. The length is the GET's, as
-/// HTTP requires.
 fn head_of(mut res: Response) -> Response {
     let len = res.body.len();
     res.body = Vec::new();
@@ -137,8 +127,6 @@ fn too_many(retry_after: u64) -> Response {
 }
 
 fn create_calendar(state: &AppState, req: &Request) -> Response {
-    // Cheapest checks first, before the body is parsed. Per-client goes ahead
-    // of the global counter so one abusive client cannot spend everyone's budget.
     let client = client_id(
         req.header("x-forwarded-for"),
         &req.peer,
@@ -155,8 +143,6 @@ fn create_calendar(state: &AppState, req: &Request) -> Response {
         .limiter
         .check("c:*", limits.creates_global_hour, HOUR_MS)
     {
-        // Nobody can create a calendar while this holds, so say so loudly:
-        // it means either real growth or a caller picking its own bucket.
         eprintln!(
             "agentcloud: GLOBAL create limit of {}/hour reached, creation is blocked for {retry}s",
             limits.creates_global_hour
@@ -174,8 +160,6 @@ fn create_calendar(state: &AppState, req: &Request) -> Response {
         Ok(_) => {}
         Err(e) => return json_err(500, &e),
     }
-    // The client made the key and sends only its auth-token hash: the
-    // server never sees the key, so it never could open a seal.
     if let Some(auth_hash) = auth_hash {
         let saved = match db.create_calendar_with_auth_hash(name.as_deref(), &auth_hash, &feed) {
             Ok(row) => row,
@@ -292,11 +276,8 @@ fn hex_pair(hi: u8, lo: u8) -> Option<u8> {
     Some((digit(hi)? * 16 + digit(lo)?) as u8)
 }
 
-/// Newest notes an Atom feed carries. Readers only show recent entries, and a
-/// full calendar of long notes would be megabytes to poll.
 const NOTES_IN_FEED: i64 = 200;
 
-/// What a feed token resolved to, read under the lock.
 enum FeedBody {
     Events(String, Vec<EventRow>),
     Todos(String, Vec<TodoRow>),
@@ -305,8 +286,6 @@ enum FeedBody {
 
 fn feed(state: &AppState, token: &str) -> Response {
     let token = feed_token_of(token);
-    // Read under the lock, render after it is released: rendering a large
-    // calendar should not stall every other request.
     let body = {
         let db = lock_db(state);
         match db.get_calendar_by_feed_token(&token) {
@@ -458,8 +437,6 @@ fn scoped(state: &AppState, req: &Request, method: &str, rest: &str) -> Response
     if rest == "trash" {
         return trash(state, req, id, method);
     }
-    // Every item write holds this until the handler returns, so an `If-Match`
-    // check and the write it guards see the same rev.
     let is_item = ["events", "todos", "notes"]
         .iter()
         .any(|k| rest == *k || rest.starts_with(&format!("{k}/")));
@@ -499,16 +476,6 @@ fn scoped(state: &AppState, req: &Request, method: &str, rest: &str) -> Response
     json_err(404, "not found")
 }
 
-/// Key rotation, made on the client so the server never sees the new key.
-///
-/// 1. `POST /v1/c/{id}/rotate {"auth_hash": sha256(new token)}`: the new token
-///    works next to the old one.
-/// 2. The client re-seals sealed items with the new key (plain PUTs).
-/// 3. `POST /v1/c/{id}/rotate/commit {"feeds": true}`, sent with the NEW
-///    token: the old token and the raw key stop working, sealed trash is
-///    dropped, and with `feeds` every subscribe URL changes.
-///
-/// `POST /v1/c/{id}/rotate/cancel` drops a rotation that was started.
 fn rotate(state: &AppState, req: &Request, cal_id: &str, method: &str, step: &str) -> Response {
     if method != "POST" || !matches!(step, "" | "/commit" | "/cancel") {
         return json_err(404, "not found");
@@ -547,7 +514,6 @@ fn rotate(state: &AppState, req: &Request, cal_id: &str, method: &str, step: &st
             Err(e) => json_err(500, &e),
         },
         _ => {
-            // Proof of the new key: commit must come with its token.
             let given = sha256_hex(&bearer(req.header("authorization")));
             if !safe_equal(&given, &cal.next_auth_hash) {
                 return json_err(409, "commit with the new key's token, after starting a rotation");
@@ -566,7 +532,6 @@ fn rotate(state: &AppState, req: &Request, cal_id: &str, method: &str, step: &st
     }
 }
 
-/// `events/{uid}`, `todos/{uid}/restore`, ... as (kind, uid, tail).
 fn item_path(rest: &str) -> Option<(&'static str, &str, &str)> {
     for (prefix, kind) in [("events/", "event"), ("todos/", "todo"), ("notes/", "note")] {
         if let Some(after) = rest.strip_prefix(prefix) {
@@ -580,15 +545,11 @@ fn item_path(rest: &str) -> Option<(&'static str, &str, &str)> {
     None
 }
 
-/// `If-Match: "<rev>"` on an item write. `None` lets the write go ahead.
-/// A missing header keeps the old last-write-wins behavior for agents.
-/// `*` only requires that the item exists.
 fn if_match(state: &AppState, req: &Request, cal_id: &str, kind: &str, uid: &str) -> Option<Response> {
     let header = req.header("if-match").trim();
     if header.is_empty() {
         return None;
     }
-    // After auth, so a stranger cannot probe which uids exist.
     let Some(cal) = authenticate(state, req, cal_id) else {
         return Some(json_err(401, "unauthorized"));
     };
@@ -622,7 +583,6 @@ fn if_match(state: &AppState, req: &Request, cal_id: &str, kind: &str, uid: &str
     ))
 }
 
-/// `GET /v1/c/{id}/changes?since=<rev>`. `since` 0 or absent is everything.
 fn changes(state: &AppState, req: &Request, cal_id: &str, method: &str) -> Response {
     if method != "GET" {
         return json_err(404, "not found");
@@ -652,7 +612,6 @@ fn changes(state: &AppState, req: &Request, cal_id: &str, method: &str) -> Respo
     }
 }
 
-/// `GET /v1/c/{id}/trash`: deleted items still restorable, newest first.
 fn trash(state: &AppState, req: &Request, cal_id: &str, method: &str) -> Response {
     if method != "GET" {
         return json_err(404, "not found");
@@ -674,7 +633,6 @@ fn trash(state: &AppState, req: &Request, cal_id: &str, method: &str) -> Respons
     }
 }
 
-/// `POST /v1/c/{id}/{events|todos|notes}/{uid}/restore`.
 fn restore(state: &AppState, req: &Request, cal_id: &str, method: &str, kind: &str, uid: &str) -> Response {
     if method != "POST" || uid.contains('/') {
         return json_err(404, "not found");
@@ -702,8 +660,6 @@ fn restore(state: &AppState, req: &Request, cal_id: &str, method: &str, kind: &s
     }
 }
 
-/// `GET /v1/c/{id}/export?format=json|md`: everything in the calendar, in one
-/// document. `/v1/export` is `home`.
 fn export(state: &AppState, req: &Request, cal_id: &str, method: &str) -> Response {
     if method != "GET" {
         return json_err(404, "not found");
@@ -717,8 +673,6 @@ fn export(state: &AppState, req: &Request, cal_id: &str, method: &str) -> Respon
         Ok(cal) => cal,
         Err(res) => return res,
     };
-    // Reading everything takes the database lock for a while, so exports are
-    // metered. The owner's own calendar is exempt, like its other limits.
     if !is_home(&cal) {
         if let Err(retry) = state.limiter.check(
             &format!("x:{}", cal.id),
@@ -766,8 +720,6 @@ enum Resource {
     Notes,
 }
 
-/// `todos/{uid}` or `notes/{uid}`. A uid never contains a slash, so anything
-/// deeper is a 404.
 fn item_route(
     state: &AppState,
     req: &Request,
@@ -790,8 +742,6 @@ fn delete_calendar(state: &AppState, req: &Request, id: &str) -> Response {
         Ok(cal) => cal,
         Err(res) => return res,
     };
-    // After auth, so a wrong key is 401 and does not reveal that `home` exists.
-    // The env recreates `home` on the next boot, so deleting it would not stick.
     if is_home(&cal) {
         return json_err(403, "home calendar cannot be deleted");
     }
@@ -819,7 +769,6 @@ fn set_calendar_feed(state: &AppState, req: &Request, id: &str) -> Response {
     let legacy_off = match legacy {
         None | Some(Value::Null) => false,
         Some(Value::Bool(false)) => true,
-        // Turning it back on would need the raw key's hash, which is gone.
         Some(_) => return json_err(400, "legacy_auth can only be set to false"),
     };
     if legacy_off && is_home(&cal) {
@@ -860,8 +809,6 @@ fn calendar_info(state: &AppState, req: &Request, id: &str) -> Response {
     }
 }
 
-/// The calendar as the API shows it: its own fields plus where its todos and
-/// notes are written and subscribed. `key` is only ever passed at creation.
 fn calendar_view(db: &Db, cal: &CalendarRow, key: Option<&str>, base: &str) -> Result<Value, String> {
     let mut view = match key {
         Some(key) => json_calendar_created(cal, key, base),
@@ -897,7 +844,6 @@ enum Target<'a> {
 }
 
 impl<'a> Target<'a> {
-    /// What follows `events/`.
     fn of(rest: &'a str) -> Self {
         match rest.split_once('/') {
             Some((uid, "exdates")) => Target::Exdates(uid),
@@ -907,7 +853,6 @@ impl<'a> Target<'a> {
     }
 }
 
-/// Every events route, for a named calendar. `/v1/events` is `home`.
 fn events(
     state: &AppState,
     req: &Request,
@@ -940,8 +885,6 @@ fn events(
     }
 }
 
-/// Authenticate, then charge the calendar's write budget. One budget covers
-/// every resource on a calendar, so events and todos share it.
 pub(crate) fn gate(
     state: &AppState,
     req: &Request,
@@ -952,7 +895,6 @@ pub(crate) fn gate(
         return Err(json_err(401, "unauthorized"));
     };
     if method != "GET" && !is_home(&cal) {
-        // After auth, so a stranger cannot spend someone else's budget.
         if let Err(retry) = state.limiter.check(
             &format!("w:{}", cal.id),
             state.limits.writes_per_minute,
@@ -964,7 +906,6 @@ pub(crate) fn gate(
     Ok(cal)
 }
 
-/// One query-string parameter, decoded.
 pub(crate) fn query_param(req: &Request, key: &str) -> Option<String> {
     let query = req.path.split_once('?')?.1;
     query.split('&').find_map(|pair| {
@@ -973,7 +914,6 @@ pub(crate) fn query_param(req: &Request, key: &str) -> Option<String> {
     })
 }
 
-/// The owner's own calendar is not subject to the caps meant for strangers.
 pub(crate) fn is_home(cal: &CalendarRow) -> bool {
     cal.id == "home"
 }
@@ -1004,9 +944,7 @@ fn get_event(state: &AppState, cal: &CalendarRow, uid: &str) -> Response {
     }
 }
 
-/// POST (no uid) and PUT (uid from the path).
 fn write_event(state: &AppState, req: &Request, cal: &CalendarRow, uid: Option<&str>) -> Response {
-    // Parse before taking the lock: a slow body must not stall other requests.
     let body = match parse_body(req) {
         Ok(v) => v,
         Err(e) => return json_err(400, &e),
@@ -1102,7 +1040,6 @@ fn delete_event(state: &AppState, cal: &CalendarRow, uid: &str) -> Response {
     }
 }
 
-/// `exdates` (skip one date) and `overrides` (change one date), PUT or DELETE.
 fn exception(
     state: &AppState,
     req: &Request,
@@ -1167,9 +1104,6 @@ fn exception(
     }
 }
 
-/// `Some(409)` when adding this exception would pass the per-series cap.
-/// Replacing one that already exists is always allowed. Anything that fails
-/// here is left for the db call to report with its usual error.
 fn exceptions_full(
     db: &Db,
     cal: &CalendarRow,
@@ -1201,15 +1135,10 @@ pub(crate) fn calendar_auth(db: &Db, id: &str, header: &str) -> Option<CalendarR
     if token.is_empty() {
         return None;
     }
-    // Only hashes are stored; compare hashes. `safe_equal` refuses an empty
-    // expected value, so a row without a hash can never authenticate.
     let given = sha256_hex(&token);
     if safe_equal(&given, &cal.auth_hash) || safe_equal(&given, &cal.next_auth_hash) {
         return Some(cal);
     }
-    // The raw write key, accepted until the calendar turns `legacy_auth` off.
-    // This is the one moment the server holds the key: record the auth-token
-    // hash so clients can move to the token without a reset.
     if cal.legacy_auth && safe_equal(&given, &cal.key_hash) {
         if cal.auth_hash.is_empty() {
             let auth_hash = sha256_hex(&crate::seal::auth_token(&token));

@@ -55,7 +55,6 @@ fn returns_html_for_browsers() {
     assert!(html.contains("Agent-First Calendar, Notes, and Todos"));
     assert!(html.contains("Ask your agent"));
     assert!(html.contains("id=\"copy\""));
-    // The prompt on the page is the prompt that gets copied: one element.
     assert!(html.contains("id=\"prompt\""));
     assert!(html.contains("example.test/llms.txt"));
     assert!(html.contains("Add nothing until I ask"));
@@ -64,18 +63,15 @@ fn returns_html_for_browsers() {
     assert!(html.contains("og:image"));
     assert!(html.contains("twitter:card"));
     assert!(!html.contains("{origin}"), "an unformatted placeholder leaked into the page");
-    // The three products are shown, in the order they are named, and the bunny is gone.
     let order: Vec<usize> = ["A calendar app", "A notes app", "A todo app"]
         .iter()
         .map(|app| html.find(app).unwrap_or_else(|| panic!("no mockup for {app}")))
         .collect();
     assert!(order.windows(2).all(|w| w[0] < w[1]), "mockups are out of order: {order:?}");
     assert!(!html.contains("mascot") && !html.contains("<img"));
-    // Less text: no feed-format labels, no long explanations.
     for gone in ["Three products", "Copy prompt", "short version", ".ics feed", "Only a hash"] {
         assert!(!html.contains(gone), "the page still says {gone:?}");
     }
-    // No external requests: fonts and images are all local.
     assert!(!html.contains("fonts.googleapis"));
     assert!(!html.contains("<link rel=\"stylesheet\""));
     assert!(!html.contains("Create Calendar"));
@@ -88,8 +84,6 @@ fn requires_a_user_agent_in_machine_docs() {
     let text = String::from_utf8(body).unwrap();
     assert!(text.contains("User-Agent"));
     assert!(text.contains("403"), "say what happens without one");
-    // Only true because GET /v1/c/{id} no longer returns the key; see
-    // `the_key_is_shown_at_creation_and_never_again`.
     assert!(text.contains("shown once"));
     assert!(text.contains("cannot be recovered"));
 }
@@ -191,7 +185,6 @@ fn str_field<'a>(v: &'a Value, key: &str) -> &'a str {
     v.get(key).and_then(Value::as_str).unwrap()
 }
 
-/// Path of a feed URL from a create response. `keys` walks nested objects.
 fn feed_path(v: &Value, keys: &[&str]) -> String {
     let mut cur = v;
     for key in keys {
@@ -651,8 +644,6 @@ fn writes_a_series_with_exceptions_on_both_url_trees() {
     assert!(!home_feed[once_at..once_at + once_end].contains("RRULE:"));
 }
 
-// ---- crash / poison regressions -------------------------------------------
-
 fn home_req(method: &str, path: &str, body: &str) -> Request {
     Request::new(method, path)
         .with_header("authorization", &format!("Bearer {KEY}"))
@@ -660,7 +651,6 @@ fn home_req(method: &str, path: &str, body: &str) -> Request {
         .with_body(body.as_bytes().to_vec())
 }
 
-/// Every request that follows a hostile one must still be served.
 fn assert_db_alive(app: &AppState) {
     let (status, _, _) = send(app, auth_get("/v1/events"));
     assert_eq!(status, 200, "db lock is unusable after a hostile request");
@@ -668,8 +658,6 @@ fn assert_db_alive(app: &AppState) {
     assert_eq!(status, 200);
 }
 
-/// Swap the ASCII char at every offset for a 2-byte one, so a fixed-offset
-/// slice lands inside a char. Also insert it, shifting every later byte.
 fn mutations(valid: &str) -> Vec<String> {
     let chars: Vec<char> = valid.chars().collect();
     let mut out = Vec::new();
@@ -728,7 +716,6 @@ fn non_ascii_wall_times_and_recurrence_ids_are_400() {
     let (status, _, _) = send(&app, home_req("PUT", "/v1/events/s", series));
     assert_eq!(status, 201);
     for bad in mutations("2026-10-06T09:00:00") {
-        // Recurring start: goes through parse_wall.
         let body = series.replace("2026-09-22T09:00:00-07:00", &bad);
         let (status, _, _) = send(&app, home_req("PUT", "/v1/events/s2", &body));
         assert_eq!(status, 400, "series start={bad:?}");
@@ -781,8 +768,6 @@ fn form_names_with_stray_percent_signs_do_not_panic() {
     }
 }
 
-// ---- limits ----------------------------------------------------------------
-
 fn create(app: &AppState, xff: Option<&str>) -> (u16, agentcloud::http::Response) {
     let mut req = Request::new("POST", "/calendars")
         .with_header("content-type", "application/json")
@@ -831,10 +816,7 @@ fn rate_limits_calendar_creation_per_client() {
     assert_eq!(status, 429);
     let retry: u64 = res.header_value("retry-after").unwrap().parse().unwrap();
     assert!((1..=3600).contains(&retry));
-    // Another client is unaffected.
     assert_eq!(create(&app, Some("2.2.2.2")).0, 201);
-    // A caller cannot pick their own bucket by prepending addresses: one proxy
-    // hop is trusted, so only the rightmost entry counts.
     assert_eq!(create(&app, Some("9.9.9.9, 1.1.1.1")).0, 429);
     assert_eq!(create(&app, Some("1.1.1.1, 3.3.3.3")).0, 201);
 }
@@ -848,7 +830,6 @@ fn caps_calendar_creation_globally_and_in_total() {
     assert_eq!(create(&app, Some("3.3.3.3")).0, 429);
 
     let mut app = test_app();
-    // The seeded home calendar counts.
     app.limits.max_calendars = 3;
     assert_eq!(create(&app, Some("1.1.1.1")).0, 201);
     assert_eq!(create(&app, Some("2.2.2.2")).0, 201);
@@ -869,12 +850,9 @@ fn caps_events_per_calendar_but_not_home() {
         call(&app, "POST", &format!("/v1/c/{id}/events"), &key, &day(5)),
         409
     );
-    // Replacing an existing event is not adding one.
     assert_eq!(call(&app, "PUT", &url("e1"), &key, &day(6)), 200);
-    // Deleting frees a slot.
     assert_eq!(call(&app, "DELETE", &url("e1"), &key, ""), 204);
     assert_eq!(call(&app, "PUT", &url("e4"), &key, &day(4)), 201);
-    // The owner's calendar is exempt.
     for n in 1..=5 {
         assert_eq!(
             call(&app, "PUT", &format!("/v1/events/h{n}"), KEY, &day(n)),
@@ -901,10 +879,8 @@ fn caps_exceptions_per_series() {
     assert_eq!(call(&app, "PUT", &ovr, &key, &ov("10-13")), 201);
     assert_eq!(call(&app, "PUT", &exd, &key, &ex("10-20")), 409);
     assert_eq!(call(&app, "PUT", &ovr, &key, &ov("10-20")), 409);
-    // Touching one that exists is fine at the cap.
     assert_eq!(call(&app, "PUT", &exd, &key, &ex("10-06")), 200);
     assert_eq!(call(&app, "PUT", &ovr, &key, &ov("10-13")), 200);
-    // Removing one makes room. Deleting is never blocked.
     assert_eq!(call(&app, "DELETE", &exd, &key, &ex("10-06")), 204);
     assert_eq!(call(&app, "PUT", &exd, &key, &ex("10-20")), 201);
 }
@@ -921,15 +897,12 @@ fn rate_limits_writes_per_calendar() {
     }
     assert_eq!(call(&app, "PUT", &url("e4"), &key, &day(4)), 429);
     assert_eq!(call(&app, "DELETE", &url("e1"), &key, ""), 429);
-    // Reads are free, other calendars have their own budget, and someone
-    // without the key cannot spend this calendar's.
     assert_eq!(call(&app, "GET", &url("e1"), &key, ""), 200);
     assert_eq!(
         call(&app, "PUT", &format!("/v1/c/{other_id}/events/x"), &other_key, &day(1)),
         201
     );
     assert_eq!(call(&app, "PUT", &url("e9"), "wrong-key", &day(9)), 401);
-    // The owner is exempt.
     for n in 1..=6 {
         assert_eq!(
             call(&app, "PUT", &format!("/v1/events/h{n}"), KEY, &day(n)),
@@ -994,7 +967,6 @@ fn rotating_the_home_key_takes_effect() {
         .unwrap();
     assert_eq!(call(&app, "GET", "/v1/events", KEY, ""), 401);
     assert_eq!(call(&app, "GET", "/v1/events", "rotated", ""), 200);
-    // The feed token did not change, so subscribers are undisturbed.
     let (status, _, _) = send(&app, Request::new("GET", &format!("/feed/{FEED}.ics")));
     assert_eq!(status, 200);
 }
@@ -1040,8 +1012,6 @@ fn head_on_a_feed_matches_get_without_the_body() {
     }
 }
 
-// ---- create input ------------------------------------------------------------
-
 #[test]
 fn bad_create_bodies_are_rejected_and_create_nothing() {
     let mut app = test_app();
@@ -1071,7 +1041,6 @@ fn bad_create_bodies_are_rejected_and_create_nothing() {
     }
     assert_eq!(app.db.lock().unwrap().count_calendars().unwrap(), 1, "only home");
 
-    // Still fine: nothing at all, blanks, an object, a null name, a form.
     assert_eq!(post(json, b""), 201);
     assert_eq!(post(json, b"  \n"), 201);
     assert_eq!(post(json, b"{}"), 201);
@@ -1080,8 +1049,6 @@ fn bad_create_bodies_are_rejected_and_create_nothing() {
     assert_eq!(post("application/x-www-form-urlencoded", b"name=Trip"), 201);
     assert_eq!(post("text/plain", b"whatever"), 201);
 }
-
-// ---- key hashing -------------------------------------------------------------
 
 fn create_json(app: &AppState) -> (String, String) {
     let (status, res) = create(app, None);
@@ -1098,7 +1065,6 @@ fn the_key_is_shown_at_creation_and_never_again() {
     let app = test_app();
     let (id, key) = create_json(&app);
 
-    // Authenticates, so the hash of the shown key is what was stored.
     let info = |bearer: &str| {
         send(
             &app,

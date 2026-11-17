@@ -27,7 +27,6 @@ pub fn is_utc(name: &str) -> bool {
     name == "UTC"
 }
 
-/// Current civil DST rules only. Not historical transitions.
 pub fn vtimezone_lines(tzid: &str) -> Option<&'static [&'static str]> {
     Some(match tzid {
         "America/Los_Angeles" => LA,

@@ -1,5 +1,3 @@
-//! Shared harness for the in-process HTTP tests: a scratch app, a `send` that
-//! goes through `handle()`, and a way to make a calendar and call it.
 #![allow(dead_code)]
 
 use agentcloud::db::Db;
@@ -18,7 +16,6 @@ pub fn app() -> AppState {
     let db = Db::open(dir.join("calendar.db")).unwrap();
     db.ensure_home_calendar(HOME_FEED, HOME_KEY, "Home").unwrap();
     let mut app = AppState::new(db, BASE.into());
-    // Creating calendars in these tests must not trip the create limit.
     app.limits.creates_per_client_hour = 1000;
     app
 }
@@ -82,7 +79,6 @@ pub fn text<'a>(v: &'a Value, key: &str) -> &'a str {
         .unwrap_or_else(|| panic!("{key} is not a string in {v:?}"))
 }
 
-/// The `title` of every item under `list_key` (`"todos"` or `"notes"`).
 pub fn titles(v: &Value, list_key: &str) -> Vec<String> {
     field(v, list_key)
         .as_array()

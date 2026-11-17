@@ -1,9 +1,3 @@
-//! SHA-256 (FIPS 180-4), std only.
-//!
-//! Used to keep write keys hashed at rest. Keys are 192 bits from
-//! `/dev/urandom`, so a fast unsalted hash is enough: there is no low-entropy
-//! secret to brute force.
-
 use crate::util::hex_encode;
 
 const K: [u32; 64] = [
@@ -67,7 +61,6 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
     for at in (0..whole).step_by(64) {
         compress(&mut state, &data[at..at + 64]);
     }
-    // Padding: 0x80, zeros, then the message length in bits as a big-endian u64.
     let rest = &data[whole..];
     let mut tail = [0u8; 128];
     tail[..rest.len()].copy_from_slice(rest);
@@ -104,8 +97,6 @@ mod tests {
             sha256_hex("abc"),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
-        // 56 bytes: the length field no longer fits in the block, so padding
-        // spills into a second one.
         assert_eq!(
             sha256_hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"),
             "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
@@ -120,9 +111,6 @@ mod tests {
 
     #[test]
     fn matches_sha256sum_at_every_padding_boundary() {
-        // Reference values from `sha256sum` over n copies of "a": the edges
-        // where padding fits in one block (55), spills into two (56, 63),
-        // ends exactly on a block (64) and crosses into the next (65, 119, 120).
         for (n, want) in [
             (55, "9f4390f8d30c2dd92ec9f095b65e2b9ae9b0a925a5258e241c9f1e910f734318"),
             (56, "b35439a4ac6f0948b6d6f9e3c6af0f5f590ce20f1bde7090ef7970686ec6738a"),

@@ -1,10 +1,3 @@
-//! Item seals. AES-256-GCM via libcrypto. The server stores the wire string
-//! and never sees the write key.
-//!
-//! `alm1.` + base64url(nonce || ciphertext || tag). The key is SHA-256 of the
-//! write key and a fixed domain. The associated data is calendar id, kind, and
-//! uid, so a seal cannot be moved to another row.
-
 use std::ffi::c_int;
 use std::ptr;
 
@@ -16,7 +9,6 @@ const DOMAIN: &[u8] = b"almanac-seal-v1";
 const PREFIX: &str = "alm1.";
 const NONCE: usize = 12;
 const TAG: usize = 16;
-/// Fits in the 64KB request cap once wrapped as `{"seal":"..."}`.
 pub const MAX_WIRE: usize = 60_000;
 
 const EVP_CTRL_GCM_SET_IVLEN: c_int = 0x9;
@@ -73,9 +65,6 @@ impl Drop for Ctx {
 
 const AUTH_DOMAIN: &[u8] = b"almanac-auth-v1";
 
-/// The bearer token a client sends. Derived from the write key on the device,
-/// so the server, which only ever sees this token, cannot rebuild the seal key.
-/// SHA-256(write key || "almanac-auth-v1") as lowercase hex.
 pub fn auth_token(write_key: &str) -> String {
     let mut msg = Vec::with_capacity(write_key.len() + AUTH_DOMAIN.len());
     msg.extend_from_slice(write_key.as_bytes());
@@ -144,7 +133,6 @@ pub fn open(
         .map_err(|_| "seal was rejected".to_string())
 }
 
-/// AES-256-GCM. Returns nonce || ciphertext || tag.
 fn gcm_seal(key: &[u8; 32], extra: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, ()> {
     if plaintext.len() > c_int::MAX as usize - 32 || extra.len() > c_int::MAX as usize {
         return Err(());
@@ -193,7 +181,6 @@ fn gcm_seal(key: &[u8; 32], extra: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, (
     Ok(packed)
 }
 
-/// Opens `gcm_seal` output. Any failure, including a wrong key or tampering, is `Err`.
 fn gcm_open(key: &[u8; 32], extra: &[u8], packed: &[u8]) -> Result<Vec<u8>, ()> {
     if packed.len() < NONCE + TAG || packed.len() > c_int::MAX as usize || extra.len() > c_int::MAX as usize {
         return Err(());
@@ -238,9 +225,6 @@ fn gcm_open(key: &[u8; 32], extra: &[u8], packed: &[u8]) -> Result<Vec<u8>, ()> 
     Ok(out)
 }
 
-/// Header of a sealed file: `ALMF1\n` then nonce || ciphertext || tag. The
-/// associated data binds the file to its calendar, so a file cannot be opened
-/// as another calendar's.
 const FILE_MAGIC: &[u8] = b"ALMF1\n";
 
 pub fn seal_file(write_key: &str, calendar_id: &str, plaintext: &[u8]) -> Result<Vec<u8>, String> {
@@ -265,7 +249,6 @@ fn file_cmd(cmd: &str, cal: Option<&str>) -> Result<String, String> {
     let out = if cmd == "seal-file" {
         seal_file(&key, &calendar_id, &input)?
     } else {
-        // A file sealed before a rotation opens with the key it was made with.
         let mut opened = open_file(&key, &calendar_id, &input);
         for old in previous_keys(cal)? {
             if opened.is_ok() {
@@ -278,7 +261,6 @@ fn file_cmd(cmd: &str, cal: Option<&str>) -> Result<String, String> {
     let mut stdout = std::io::stdout();
     stdout.write_all(&out).map_err(|e| e.to_string())?;
     stdout.flush().map_err(|e| e.to_string())?;
-    // Already written; main prints nothing more for an empty string.
     Ok(String::new())
 }
 
@@ -303,8 +285,6 @@ fn decode_wire(wire: &str) -> Result<Vec<u8>, String> {
     Ok(packed)
 }
 
-/// `Some(seal)` when the body is a seal write. `None` when it is a field write.
-/// A sealed calendar rejects a field write. A seal body may also carry `uid`.
 pub fn classify(body: &Value, feed_mode: &str) -> Result<Option<String>, String> {
     let obj = body.as_object().ok_or("body must be an object")?;
     if obj.contains_key("seal") {
@@ -399,9 +379,6 @@ fn base64url_decode(text: &str) -> Result<Vec<u8>, ()> {
 
 const USAGE: &str = "usage: agentcloud seal|open [--cal ID] --kind event|todo|note --uid UID\n       agentcloud auth-token [--cal ID]\n       agentcloud seal-file|open-file [--cal ID] < in > out";
 
-/// `agentcloud seal|open|auth-token|seal-file|open-file`. The key is read from
-/// the credentials file and never printed. `auth-token` prints the bearer
-/// derived from it, which logs in but cannot open a seal.
 pub fn run(cmd: &str, args: &[String]) -> Result<String, String> {
     let mut cal: Option<String> = None;
     let mut kind: Option<String> = None;
@@ -448,8 +425,6 @@ pub fn run(cmd: &str, args: &[String]) -> Result<String, String> {
     }
 }
 
-/// Keys this calendar used before a rotation (`previousKeys` in the
-/// credentials entry), newest first. Old backups and exports need them.
 fn previous_keys(want: Option<&str>) -> Result<Vec<String>, String> {
     let row = load_row(want)?;
     let list = match row.get("previousKeys") {
@@ -466,9 +441,6 @@ fn previous_keys(want: Option<&str>) -> Result<Vec<String>, String> {
         .collect())
 }
 
-/// The credentials file: `AGENTCLOUD_CREDS`, then `ALMANAC_CREDS`, then
-/// `~/.config/agentcloud/hosted-calendars.json` if it exists, else the old
-/// `~/.config/almanac/hosted-calendars.json`, so machines can move one at a time.
 pub fn creds_path() -> String {
     for var in ["AGENTCLOUD_CREDS", "ALMANAC_CREDS"] {
         if let Some(path) = std::env::var(var).ok().filter(|p| !p.trim().is_empty()) {

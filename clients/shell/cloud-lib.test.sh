@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# bash clients/shell/cloud-lib.test.sh   (needs target/debug/agentcloud)
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 root=$(cd "$here/../.." && pwd)
@@ -13,13 +12,12 @@ for _ in $(seq 100); do curl -s -o /dev/null "http://127.0.0.1:$port/health" && 
 fails=0
 check() { if [[ $2 == "$3" ]]; then echo "ok - $1"; else echo "not ok - $1: got [$2] want [$3]"; fails=$((fails + 1)); fi; }
 
-# A legacy calendar (server-made key, so the token is not known yet).
 curl -s -H 'content-type: application/json' -H 'accept: application/json' -d '{"feed":"seal"}' "http://127.0.0.1:$port/calendars" >"$work/cal.json"
 python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); json.dump([{"id":c["id"],"key":c["key"],"write":c["write"]}], open(sys.argv[2],"w"))' "$work/cal.json" "$work/creds.json"
 chmod 600 "$work/creds.json"
 
 (
-  trap - EXIT # a subshell would otherwise chain the parent's cleanup into ours
+  trap - EXIT
   export AGENTCLOUD_CONFIG="$work/creds.json" AGENTCLOUD_BIN="$BIN"
   # shellcheck source=cloud-lib.sh
   . "$here/cloud-lib.sh"
@@ -47,8 +45,6 @@ chmod 600 "$work/creds.json"
 )
 fails=$?
 
-# Rename defaults: ~/.config/agentcloud first, ~/.config/almanac as fallback,
-# and the old prod host moves to cloud.bixbyapps.com.
 home=$(mktemp -d); mkdir -p "$home/almanac"
 echo '[{"id":"cal_x","key":"k","write":"https://almanac.dottie.ai/v1/c/cal_x/events"}]' >"$home/almanac/hosted-calendars.json"
 got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" bash -c '. "$1"; cloud_load; echo "$CLOUD_CONFIG $CLOUD_ROOT"' _ "$here/cloud-lib.sh")
@@ -56,7 +52,6 @@ check "falls back to ~/.config/almanac, old host to cloud" "$got" "$home/almanac
 mkdir -p "$home/agentcloud"; cp "$home/almanac/hosted-calendars.json" "$home/agentcloud/"
 got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" bash -c '. "$1"; echo "$CLOUD_CONFIG"' _ "$here/cloud-lib.sh")
 check "prefers ~/.config/agentcloud" "$got" "$home/agentcloud/hosted-calendars.json"
-# Old ALMANAC_* env names still work for installs from before the rename.
 got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" ALMANAC_CONFIG="$home/almanac/hosted-calendars.json" ALMANAC_BASE=http://old:2 ALMANAC_UA=old-ua bash -c '. "$1"; cloud_load; echo "$CLOUD_CONFIG $CLOUD_ROOT $CLOUD_UA"' _ "$here/cloud-lib.sh")
 check "ALMANAC_* env fallbacks" "$got" "$home/almanac/hosted-calendars.json http://old:2/v1/c/cal_x old-ua"
 got=$(env -i PATH="$PATH" HOME="$home" XDG_CONFIG_HOME="$home" CLOUD_BASE=http://preset:3 AGENTCLOUD_BASE=http://h:1 bash -c '. "$1"; cloud_load; echo "$CLOUD_ROOT"' _ "$here/cloud-lib.sh")

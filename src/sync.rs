@@ -1,16 +1,3 @@
-//! Sync revisions, a 30-day trash, and the changes feed (0.31.0).
-//!
-//! Every calendar has a `rev` counter. SQLite triggers bump it on each insert,
-//! update or delete of an event, todo or note, and stamp the row with the new
-//! value. A delete moves the row into `trash_<table>` with the rev of the
-//! delete, so a client that synced at rev N can learn about it, and the owner
-//! can undo it. Rows stay in the trash for `TRASH_DAYS`; purging records
-//! `purged_rev`, and a client whose cursor is older must do a full resync.
-//!
-//! Triggers are rebuilt on every open from the live column list, so a later
-//! `ALTER TABLE ... ADD COLUMN` is carried into the trash without a new
-//! migration here.
-
 use crate::db::{column_names, json_event, table_names, Db, EventRow};
 use crate::json::Value;
 use crate::notes::{json_note, NoteRow};
@@ -19,7 +6,6 @@ use crate::todos::{json_todo, TodoRow};
 
 pub const TRASH_DAYS: i64 = 30;
 
-/// Item tables and the API name of their kind.
 pub const KINDS: [(&str, &str); 3] = [("events", "event"), ("todos", "todo"), ("notes", "note")];
 
 pub fn table_for(kind: &str) -> Option<&'static str> {
@@ -56,7 +42,6 @@ pub(crate) fn migrate(db: &Connection) -> Result<(), String> {
     tx.commit()
 }
 
-/// Create `trash` with `table`'s columns, or add any it is missing.
 fn sync_trash_table(db: &Connection, table: &str, trash: &str, tables: &[String]) -> Result<(), String> {
     if !tables.iter().any(|t| t == trash) {
         db.execute_batch(&format!(
@@ -79,15 +64,11 @@ fn install_triggers(db: &Connection, table: &str, trash: &str) -> Result<(), Str
     let cols = column_names(db, table)?;
     let list = cols.join(", ");
     let old = cols.iter().map(|c| format!("OLD.{c}")).collect::<Vec<_>>().join(", ");
-    // A new event under a deleted uid must not inherit the old one's
-    // exceptions on a later restore.
     let clear_exceptions = if table == "events" {
         "DELETE FROM trash_event_exceptions WHERE calendar_id = NEW.calendar_id AND uid = NEW.uid;"
     } else {
         ""
     };
-    // `WHEN NEW.rev IS OLD.rev`: the trigger's own rev stamp is an update too,
-    // and must not count as another change.
     db.execute_batch(&format!(
         "DROP TRIGGER IF EXISTS {table}_rev_insert;
          DROP TRIGGER IF EXISTS {table}_rev_update;
@@ -113,19 +94,16 @@ fn install_triggers(db: &Connection, table: &str, trash: &str) -> Result<(), Str
     ))
 }
 
-/// What changed on a calendar after `since`.
 pub struct Changes {
     pub rev: i64,
     pub events: Vec<EventRow>,
     pub todos: Vec<TodoRow>,
     pub notes: Vec<NoteRow>,
-    /// (kind, uid, rev of the delete)
     pub deleted: Vec<(String, String, i64)>,
 }
 
 #[derive(Debug, PartialEq)]
 pub enum ChangesError {
-    /// The cursor is older than the oldest delete still on record.
     Expired,
     Db(String),
 }
@@ -137,7 +115,6 @@ impl From<String> for ChangesError {
 }
 
 impl Db {
-    /// Row counts for the restore test and `agentcloud stats`. No contents.
     pub fn stats(&self) -> Result<Vec<(&'static str, i64)>, String> {
         let mut out = Vec::new();
         for table in ["calendars", "events", "todos", "notes", "trash_events", "trash_todos", "trash_notes"] {
@@ -161,12 +138,8 @@ impl Db {
             .unwrap_or((0, 0)))
     }
 
-    /// `since` 0 is a full snapshot (rows from before 0.31.0 have rev 0).
     pub fn changes(&self, calendar_id: &str, since: i64) -> Result<Changes, ChangesError> {
         let (rev, purged) = self.calendar_revs(calendar_id)?;
-        // A cursor past the counter comes from before a restore from backup:
-        // the revs after the backup are being handed out again, so a delta
-        // would skip them. Make the client start over.
         if since > 0 && (since < purged || since > rev) {
             return Err(ChangesError::Expired);
         }
@@ -179,7 +152,6 @@ impl Db {
                 deleted: Vec::new(),
             });
         }
-        // Only the rows after the cursor, through the (calendar_id, rev) index.
         let binds = [Bind::Text(calendar_id), Bind::I64(since)];
         let uids = self.conn.query(
             "SELECT uid FROM events WHERE calendar_id = ?1 AND rev > ?2 ORDER BY rev",
@@ -188,7 +160,6 @@ impl Db {
         )?;
         let mut events = Vec::with_capacity(uids.len());
         for uid in uids {
-            // get_event attaches the exdates and overrides.
             if let Some(event) = self.get_event(calendar_id, &uid)? {
                 events.push(event);
             }
@@ -226,7 +197,6 @@ impl Db {
         Ok(Changes { rev, events, todos, notes, deleted })
     }
 
-    /// Current rev of one live item, or `None` if it does not exist.
     pub fn item_rev(&self, kind: &str, calendar_id: &str, uid: &str) -> Result<Option<i64>, String> {
         let table = table_for(kind).ok_or("unknown kind")?;
         self.conn.query_row(
@@ -236,8 +206,6 @@ impl Db {
         )
     }
 
-    /// Put an event's exceptions in the trash next to it, so a restore brings
-    /// back its skipped and moved occurrences. Call before deleting them.
     pub(crate) fn trash_exceptions(&self, calendar_id: &str, uid: &str) -> Result<(), String> {
         let cols = column_names(&self.conn, "event_exceptions")?.join(", ");
         let binds = [Bind::Text(calendar_id), Bind::Text(uid)];
@@ -255,8 +223,6 @@ impl Db {
         Ok(())
     }
 
-    /// Move an item back out of the trash. `Ok(false)` if it is not there.
-    /// `Err("exists")` if a live item already has that uid.
     pub fn restore_item(&self, kind: &str, calendar_id: &str, uid: &str) -> Result<bool, String> {
         let table = table_for(kind).ok_or("unknown kind")?;
         let tx = self.conn.begin()?;
@@ -265,7 +231,6 @@ impl Db {
             return Err("exists".into());
         }
         if table == "events" {
-            // Before the event: its insert trigger clears trashed exceptions.
             let ex = column_names(&self.conn, "event_exceptions")?.join(", ");
             self.conn.execute(
                 &format!(
@@ -290,8 +255,6 @@ impl Db {
         Ok(true)
     }
 
-    /// Items in the trash, newest delete first, each with `kind`, `deletedAt`
-    /// and `deletedRev`.
     pub fn list_trash(&self, calendar_id: &str) -> Result<Vec<Value>, String> {
         let mut out = Vec::new();
         for (table, kind) in KINDS {
@@ -300,7 +263,6 @@ impl Db {
                 "todos" => crate::todos::TODO_COLS,
                 _ => crate::notes::NOTE_COLS,
             };
-            // `deleted_at` and `trash_rev` follow the item columns.
             let n = cols.split(',').count() as i32;
             let rows = self.conn.query(
                 &format!(
@@ -328,8 +290,6 @@ impl Db {
         Ok(out.into_iter().map(|(_, v)| v).collect())
     }
 
-    /// Drop trash older than `cutoff` (an ISO instant) and raise each
-    /// calendar's `purged_rev` past what was dropped. Returns rows removed.
     pub fn purge_trash(&self, cutoff: &str) -> Result<usize, String> {
         let tx = self.conn.begin()?;
         let mut removed = 0;
@@ -361,8 +321,6 @@ impl Db {
     }
 }
 
-/// `{"rev":N,"events":[..],"todos":[..],"notes":[..],"deleted":[{kind,uid,rev}]}`.
-/// Note bodies are included: a sync client needs them.
 pub fn json_changes(c: &Changes) -> Value {
     Value::object(&[
         ("rev", Value::Number(c.rev)),

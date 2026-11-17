@@ -107,9 +107,6 @@ fn write_string(out: &mut String, s: &str) {
     out.push('"');
 }
 
-/// Deepest object/array nesting `parse` accepts. Recursive descent would
-/// otherwise overflow the stack on `[[[[...`, and a stack overflow aborts the
-/// whole process rather than one worker thread.
 const MAX_DEPTH: usize = 32;
 
 pub fn parse(input: &str) -> Result<Value, String> {
@@ -240,8 +237,6 @@ impl Parser<'_> {
         }
         let mut out = String::new();
         loop {
-            // Copy the run up to the next delimiter in one slice. Every
-            // delimiter is ASCII, so both ends sit on char boundaries.
             let start = self.i;
             while self.i < self.bytes.len() {
                 let b = self.bytes[self.i];

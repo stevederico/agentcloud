@@ -1,15 +1,3 @@
-// Agent Cloud client for browsers (and Node 20+). One ES module, no dependencies.
-// Copied into each web app (Calendar, Todos, Notes); this file in the agentcloud repo is the source.
-// The "almanac-*-v1" domains below are the wire format and must never be renamed.
-//
-// The write key never leaves the device and is never stored:
-//   auth token = hex SHA-256(key + "almanac-auth-v1")   sent as the bearer
-//   seal key   = SHA-256(key + "almanac-seal-v1")        AES-256-GCM, non-extractable
-// The server only ever sees the token, which cannot open a seal.
-//
-// Seal wire format (matches agentcloud src/seal.rs):
-//   "alm1." + base64url(nonce(12) || ciphertext || tag(16)), AAD = id \0 kind \0 uid
-
 export const AUTH_DOMAIN = "almanac-auth-v1"
 export const SEAL_DOMAIN = "almanac-seal-v1"
 const PREFIX = "alm1."
@@ -28,18 +16,15 @@ export async function authToken(key) {
   return hex(await subtle().digest("SHA-256", enc.encode(String(key) + AUTH_DOMAIN)))
 }
 
-/** The hash the server stores for a token: what `POST /calendars {auth_hash}` takes. */
 export async function authHash(token) {
   return hex(await subtle().digest("SHA-256", enc.encode(String(token))))
 }
 
-/** A non-extractable AES-GCM key: storable in IndexedDB, never readable as bytes. */
 export async function sealKey(key) {
   const raw = await subtle().digest("SHA-256", enc.encode(String(key) + SEAL_DOMAIN))
   return subtle().importKey("raw", raw, { name: "AES-GCM" }, false, ["encrypt", "decrypt"])
 }
 
-/** A new random write key, 48 hex characters like the server makes. */
 export function newKey() {
   return hex(globalThis.crypto.getRandomValues(new Uint8Array(24)))
 }
@@ -99,7 +84,6 @@ export async function openWith(cryptoKey, calendarId, kind, uid, wire) {
   }
 }
 
-/** Open a seal with the first key that fits; null keys are skipped. */
 export async function openWithAny(keys, calendarId, kind, uid, wire) {
   for (const key of keys) {
     if (!key) continue
@@ -110,14 +94,6 @@ export async function openWithAny(keys, calendarId, kind, uid, wire) {
   throw new Error("seal was rejected")
 }
 
-/**
- * Open sealed rows (`{uid, seal}`) kept on this device, as after a sign-in
- * with a rotated key. Each is tried with the calendar's previous key (kept by
- * `store.keepPrevious` when the old key was rejected), then the session's.
- * Returns `{opened: [{row, fields}], unreadable: [row], previous}`. Seal the
- * opened fields again with the session's key and store them; only then call
- * `store.forgetPrevious(session.id)`. Keep the unreadable rows: never drop them.
- */
 export async function openKept(store, session, kind, rows) {
   const previous = await store.previous(session.id)
   const out = { opened: [], unreadable: [], previous: !!previous }
@@ -138,7 +114,6 @@ export class CloudError extends Error {
     this.status = status
     this.data = data
   }
-  /** 412: the item changed (or was deleted) since it was read. */
   get conflict() {
     return this.status === 412
   }
@@ -183,11 +158,6 @@ async function call(base, bearer, path, { method = "GET", body, ifMatch, fetchIm
   return data
 }
 
-/**
- * Sign in with a calendar id and its write key. Returns a session holding the
- * auth token and the non-extractable seal key; the key itself is dropped.
- * A calendar from before 0.30.0 learns its token on one raw-key request.
- */
 export async function signIn({ id, key, base = "", fetchImpl } = {}) {
   id = String(id || "").trim()
   key = String(key || "").trim()
@@ -211,7 +181,6 @@ export async function signIn({ id, key, base = "", fetchImpl } = {}) {
   }
 }
 
-/** API calls for one session. Items come back opened: sealed or not, the same fields. */
 export function createClient(session, { base = "", fetchImpl } = {}) {
   const cal = `/v1/c/${encodeURIComponent(session.id)}`
   const req = (path, opts = {}) => call(base, session.token, cal + path, { ...opts, fetchImpl })
@@ -264,12 +233,6 @@ export function createClient(session, { base = "", fetchImpl } = {}) {
       checkKind(kind)
       return openItem(kind, await req(itemPath(kind, uid)))
     },
-    /**
-     * Create or replace one item. `rev` (from the item you edited) makes the
-     * write conditional: a 412 CloudError carries `data.current` (opened).
-     * On a sealed calendar the fields are sealed here; on a plain one PUT keeps
-     * fields you leave out, so it doubles as a patch (Cloudflare blocks PATCH).
-     */
     async put(kind, uid, fields, { rev } = {}) {
       checkKind(kind)
       const body =
@@ -282,7 +245,6 @@ export function createClient(session, { base = "", fetchImpl } = {}) {
         throw await withOpenedConflict(e, kind)
       }
     },
-    /** Change some fields. Sealed items are opened, merged, and sealed again. */
     async update(kind, uid, changes, { rev } = {}) {
       if (session.feed !== "seal") return client.put(kind, uid, changes, { rev })
       const current = await client.get(kind, uid)
@@ -318,7 +280,6 @@ export function createClient(session, { base = "", fetchImpl } = {}) {
       }
       return out
     },
-    /** `{rev, events, todos, notes, deleted, full}`; `full` when the cursor was reset. */
     async changes(since = 0) {
       let data
       let full = !since
@@ -352,11 +313,6 @@ export function createClient(session, { base = "", fetchImpl } = {}) {
   return client
 }
 
-/**
- * Poll `changes` on focus and every `intervalMs` while the page is visible.
- * `onChange(result)` gets each non-empty result; `result.full` means replace
- * everything (first run, or the cursor was older than the trash).
- */
 export function createSync(client, { onChange, onError, intervalMs = 60000, cursor = 0 } = {}) {
   let timer = null
   let running = false
@@ -379,8 +335,6 @@ export function createSync(client, { onChange, onError, intervalMs = 60000, curs
           !result.todos.length &&
           !result.notes.length &&
           !result.deleted.length
-        // Move the cursor only after the handler took the batch, so a
-        // handler that throws sees the same changes again next time.
         if (!empty && onChange) await onChange(result)
         cursor = result.rev
       } while (again)
@@ -425,14 +379,6 @@ export function createSync(client, { onChange, onError, intervalMs = 60000, curs
   }
 }
 
-/**
- * The session in IndexedDB: id, name, feed, token, and the seal key as a
- * non-extractable CryptoKey. Never the write key. Falls back to memory when
- * IndexedDB is unavailable. `clearLegacy(names)` removes old localStorage
- * entries that held the raw key. `keepPrevious(session)` keeps the seal key
- * as the calendar's previous key past `clear()`, for unsent items sealed with
- * it; `previous(id)` reads it, `forgetPrevious(id)` deletes it.
- */
 export function sessionStore(name = "agentcloud") {
   let memory = null
   const previousKeys = new Map()

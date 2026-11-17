@@ -1,19 +1,10 @@
-//! Socket-level tests for the accept loop.
-//!
-//! `serve` lives in the binary, not the library, so these spawn the real
-//! binary and drive it over a TCP socket. Nothing else in the suite opens a
-//! socket — every other test calls `handle()` in process.
-
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command};
 use std::time::{Duration, Instant};
 
-/// Long enough to cover the server's 10s read timeout plus scheduling slack,
-/// short enough that a genuine hang still fails the test rather than the suite.
 const HANG_BUDGET: Duration = Duration::from_secs(25);
 
-/// Kills the server when the test ends, including on panic.
 struct ServerGuard(Child);
 
 impl Drop for ServerGuard {
@@ -23,14 +14,8 @@ impl Drop for ServerGuard {
     }
 }
 
-/// Ports already handed to a server in this process.
 static HANDED_OUT: std::sync::Mutex<Vec<u16>> = std::sync::Mutex::new(Vec::new());
 
-/// Ask the OS for a free port, then release it for the server to claim.
-///
-/// The probe-and-release leaves a window where the OS can hand the same port
-/// to a parallel test, which then talks to (or kills) the wrong server. Never
-/// return one twice.
 fn free_port() -> u16 {
     loop {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind probe");
@@ -48,9 +33,6 @@ fn start_server(db: &str) -> (ServerGuard, u16) {
 }
 
 fn start_server_with(db: &str, env: &[(&str, &str)]) -> (ServerGuard, u16) {
-    // A port another process grabbed after the probe makes our server exit
-    // with a bind error while the connect below reaches the other one. Check
-    // that ours is still alive, and try a fresh port if not.
     for _ in 0..5 {
         let port = free_port();
         let child = Command::new(env!("CARGO_BIN_EXE_agentcloud"))
@@ -85,13 +67,9 @@ fn drops_a_connection_that_never_finishes_its_headers() {
     let (_server, port) = start_server("agentcloud-slowloris-test.db");
 
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
-    // A request line with no terminating blank line: the header loop in
-    // read_request would otherwise block here forever.
     stream.write_all(b"GET / HTTP/1.1\r\nHost: x\r\n").expect("write partial");
     stream.flush().expect("flush");
 
-    // Read past the server's own deadline. Without the timeout this blocks
-    // until the test harness gives up.
     stream
         .set_read_timeout(Some(HANG_BUDGET))
         .expect("set client timeout");
@@ -135,7 +113,6 @@ fn still_serves_a_well_formed_request() {
     );
 }
 
-/// Send `raw`, read until the server closes, return everything it said.
 fn exchange(port: u16, raw: &[u8]) -> String {
     let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
     stream
@@ -157,10 +134,6 @@ fn drops_a_client_that_drips_bytes_forever() {
         .set_read_timeout(Some(HANG_BUDGET))
         .expect("set client timeout");
     let mut writer = stream.try_clone().expect("clone");
-    // One byte every 4s: always inside the server's 10s per-read timeout, so
-    // only the total request deadline can end this.
-    // Detached on purpose: against a server that never hangs up this thread
-    // would otherwise keep the test alive long after its assertions fail.
     std::thread::spawn(move || {
         let head = b"GET / HTTP/1.1\r\nHost: x\r\nX-Slow: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         for b in head {
@@ -320,13 +293,12 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     use std::process::Command;
 
     if Command::new("python3").arg("--version").output().is_err() {
-        return; // The script needs python3; nothing to test without it.
+        return;
     }
     let db = std::env::temp_dir().join(format!("agentcloud-pull-{}.db", std::process::id()));
     let _ = std::fs::remove_file(&db);
     let (_server, port) = start_server(db.to_str().unwrap());
 
-    // A calendar with one note in it. Plain, so the note is stored as fields.
     let created = exchange(
         port,
         b"POST /calendars HTTP/1.1\r\nHost: x\r\nContent-Type: application/json\r\nContent-Length: 16\r\n\r\n{\"feed\":\"plain\"}",
@@ -400,14 +372,12 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     assert_eq!(std::fs::metadata(&dest).unwrap().permissions().mode() & 0o777, 0o700);
     assert!(String::from_utf8_lossy(&out.stdout).contains("1 notes"));
 
-    // Keep the newest two.
     assert!(run().status.success());
     assert!(run().status.success());
     let kept = files();
     assert_eq!(kept.len(), 2, "{kept:?}");
     assert!(!kept.contains(&saved[0]), "the oldest copy should have been pruned");
 
-    // A wrong key is refused, says so without echoing the key, and touches nothing.
     write_creds("not-the-key");
     let bad = run();
     assert!(!bad.status.success());
@@ -416,7 +386,6 @@ fn pull_export_saves_a_private_copy_prunes_old_ones_and_never_saves_a_bad_respon
     assert!(!stderr.contains("not-the-key") && !stderr.contains(&key), "the key was printed");
     assert_eq!(files(), kept, "a failed run must leave the saved copies alone");
 
-    // A server that is not there fails cleanly too.
     write_creds(&key);
     let down = Command::new("python3")
         .arg(&script)

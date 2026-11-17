@@ -1,4 +1,3 @@
-/// Canonicalize a subset of RFC 5545 RRULE. Does not expand occurrences.
 pub fn canonicalize(raw: &str, all_day: bool) -> Result<String, String> {
     let raw = raw.trim();
     if raw.is_empty() {

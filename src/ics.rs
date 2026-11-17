@@ -1,8 +1,3 @@
-/// RFC 5545 text escaping for SUMMARY / DESCRIPTION / LOCATION.
-///
-/// Newlines become the `\n` escape and tabs pass through. Any other control
-/// character (NUL, bell, escape, DEL, C1) is dropped: TEXT allows none of
-/// them, and calendar apps reject or truncate a feed that carries one.
 pub fn escape_text(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -16,7 +11,6 @@ pub fn escape_text(value: &str) -> String {
         .collect()
 }
 
-/// Fold a content line at 75 octets. Continuations start with a space.
 pub fn fold_line(line: &str) -> String {
     let bytes = line.as_bytes();
     if bytes.len() <= 75 {
@@ -260,7 +254,6 @@ fn vevent(ev: &IcsEvent) -> String {
         .join("\r\n")
 }
 
-/// Build a PUBLISH calendar. Stable UIDs; SEQUENCE tracks edits.
 pub fn render_calendar(cal_name: &str, events: &[IcsEvent]) -> String {
     let name_line = format!("X-WR-CALNAME:{}", escape_text(cal_name));
     let mut lines: Vec<String> = [
@@ -295,7 +288,6 @@ pub struct IcsTodo {
     pub uid: String,
     pub title: String,
     pub description: String,
-    /// `""`, `YYYY-MM-DD`, or a UTC instant.
     pub due: String,
     pub done: bool,
     pub completed_at: String,
@@ -346,7 +338,6 @@ fn vtodo(todo: &IcsTodo) -> String {
         lines.push(format!("PRIORITY:{}", todo.priority));
     }
     if !todo.tags.is_empty() {
-        // Each value is escaped; the commas between them are the separator.
         let tags: Vec<String> = todo.tags.iter().map(|t| escape_text(t)).collect();
         lines.push(format!("CATEGORIES:{}", tags.join(",")));
     }
@@ -361,7 +352,6 @@ fn vtodo(todo: &IcsTodo) -> String {
     lines.into_iter().map(|l| fold_line(&l)).collect::<Vec<_>>().join("\r\n")
 }
 
-/// A subscribeable calendar holding only `VTODO`s.
 pub fn render_todos(cal_name: &str, todos: &[IcsTodo]) -> String {
     let name_line = format!("X-WR-CALNAME:{}", escape_text(&format!("{cal_name} Todos")));
     let mut lines: Vec<String> = [
@@ -445,7 +435,6 @@ mod tests {
         for line in ics.split("\r\n") {
             assert!(line.len() <= 75, "unfolded line of {} octets: {line}", line.len());
         }
-        // A title cannot inject a property by carrying a newline.
         let evil = render_todos("x", &[todo("a\r\nSTATUS:COMPLETED")]);
         let statuses: Vec<&str> = evil.split("\r\n").filter(|l| l.starts_with("STATUS:")).collect();
         assert_eq!(statuses, ["STATUS:NEEDS-ACTION"], "{evil}");

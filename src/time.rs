@@ -1,19 +1,16 @@
 use crate::util::unix_millis;
 
-/// Instant → `YYYYMMDDTHHMMSSZ`.
 pub fn to_ics_utc(iso: &str) -> Result<String, String> {
     let ms = parse_rfc3339_millis(iso).ok_or_else(|| format!("invalid date: {iso}"))?;
     let (y, m, d, hh, mm, ss, _) = civil_from_millis(ms);
     Ok(format!("{y:04}{m:02}{d:02}T{hh:02}{mm:02}{ss:02}Z"))
 }
 
-/// Calendar date `YYYY-MM-DD` → `YYYYMMDD`.
 pub fn to_ics_date(ymd: &str) -> Result<String, String> {
     let (y, m, d) = parse_ymd(ymd).ok_or_else(|| format!("invalid all-day date: {ymd}"))?;
     Ok(format!("{y:04}{m:02}{d:02}"))
 }
 
-/// Exclusive next DATE for all-day DTEND.
 pub fn next_date(ymd: &str) -> Result<String, String> {
     let (y, m, d) = parse_ymd(ymd).ok_or_else(|| format!("invalid all-day date: {ymd}"))?;
     let (y, m, d) = add_days(y, m, d, 1).ok_or_else(|| format!("invalid all-day date: {ymd}"))?;
@@ -28,7 +25,6 @@ pub fn parse_instant(value: &str) -> Option<String> {
     parse_rfc3339_millis(value).map(format_utc_millis)
 }
 
-/// The instant `days` days before now, in the stored format.
 pub fn days_ago_iso(days: i64) -> String {
     format_utc_millis(unix_millis() - days * 86_400_000)
 }
@@ -55,10 +51,7 @@ fn parse_ymd(value: &str) -> Option<(i32, u32, u32)> {
     Some((y, m, d))
 }
 
-/// RFC3339 with optional millis and Z / ±HH:MM.
 fn parse_rfc3339_millis(value: &str) -> Option<i64> {
-    // Non-ASCII input can put a char boundary anywhere the fixed-offset
-    // slices below land, and slicing inside a char panics.
     if !value.is_ascii() {
         return None;
     }
@@ -144,7 +137,6 @@ fn civil_from_millis(ms: i64) -> (i32, u32, u32, u32, u32, u32, u32) {
     let mut secs = ms.div_euclid(1000);
     let milli = ms.rem_euclid(1000) as u32;
     if secs < 0 {
-        // keep civil math on non-negative days via euclid; secs can be negative
     }
     let days = secs.div_euclid(86_400);
     secs = secs.rem_euclid(86_400);

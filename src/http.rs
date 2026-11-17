@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 
 const MAX_HEADERS: usize = 64 * 1024;
-/// Every field is capped at 4000 chars, so a legitimate body is far smaller.
 const MAX_BODY: usize = 64 * 1024;
 
 #[derive(Debug, Clone)]
@@ -11,7 +10,6 @@ pub struct Request {
     pub path: String,
     pub headers: HashMap<String, String>,
     pub body: Vec<u8>,
-    /// Socket peer address. Empty when not from a socket (tests).
     pub peer: String,
 }
 
@@ -101,12 +99,9 @@ pub fn html_response(status: u16, body: String) -> Response {
     text_response(status, "text/html; charset=utf-8", body)
 }
 
-/// Why a request could not be read.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ReadError {
-    /// The peer is gone or sent nothing usable. There is no one to answer.
     Closed(String),
-    /// Answer with this status and message, then close.
     Reject(u16, &'static str),
 }
 
@@ -123,8 +118,6 @@ pub fn read_request(stream: &mut impl Read) -> Result<Request, ReadError> {
     read_request_with(stream, &mut || {})
 }
 
-/// Read one request. `on_continue` runs when the client sent
-/// `Expect: 100-continue` and is waiting for a go-ahead before its body.
 pub fn read_request_with(
     stream: &mut impl Read,
     on_continue: &mut dyn FnMut(),
@@ -227,7 +220,6 @@ fn parse_head(buf: &[u8], header_end: usize) -> Result<(Request, Vec<u8>), ReadE
             continue;
         };
         let key = k.trim().to_ascii_lowercase();
-        // Two lengths is how a request gets read differently by two parsers.
         if key == "content-length" && headers.contains_key(&key) {
             return Err(bad);
         }
@@ -258,7 +250,6 @@ fn content_length(req: &Request) -> Result<usize, ReadError> {
     if !raw.bytes().all(|b| b.is_ascii_digit()) {
         return Err(ReadError::Reject(400, "bad content-length"));
     }
-    // Digits that overflow usize are a body too large, not a bad header.
     Ok(raw.parse().unwrap_or(usize::MAX))
 }
 

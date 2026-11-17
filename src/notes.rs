@@ -1,9 +1,3 @@
-//! Notes: storage, input parsing, JSON, and the HTTP routes.
-//!
-//! Same shape as todos: rows in the shared database keyed by calendar id, the
-//! calendar's one write key, a feed under its own token. The feed is Atom (see
-//! `atom.rs`) because a note has no place in an ICS calendar that apps honour.
-
 use crate::db::{is_uid, CalendarRow, Db};
 use crate::http::{json_response, Request, Response};
 use crate::json::{stringify, Value};
@@ -17,7 +11,6 @@ pub(crate) const NOTE_COLS: &str = "uid, title, body, tags, pinned, sequence, cr
 
 const MAX_TITLE: usize = 200;
 
-/// Markdown text. Under the 64KB request cap so a note always fits in one PUT.
 pub const MAX_BODY: usize = 32 * 1024;
 
 #[derive(Debug, Clone)]
@@ -34,7 +27,6 @@ pub struct NoteRow {
     pub rev: i64,
 }
 
-/// What a write may set. `None` leaves the stored value alone.
 #[derive(Debug, Default)]
 pub struct NoteFields {
     pub uid: Option<String>,
@@ -81,7 +73,6 @@ pub(crate) fn row_note(row: &Row) -> NoteRow {
     }
 }
 
-/// `%needle%` for `LIKE ... ESCAPE '\'`, with the wildcards in `needle` made literal.
 fn like_pattern(needle: &str) -> String {
     let mut out = String::from("%");
     for c in needle.chars() {
@@ -114,9 +105,6 @@ impl Db {
         )
     }
 
-    /// Notes whose title or body contains `q` (ASCII case-insensitive; `%` and
-    /// `_` are literal). Pinned first, then most recently changed. `limit` of 0
-    /// or less means no limit.
     pub fn list_notes(
         &self,
         calendar_id: &str,
@@ -142,8 +130,6 @@ impl Db {
         }
     }
 
-    /// Create or update. Returns the saved row and whether it was created.
-    /// `uid` of `None` mints one.
     pub fn upsert_note(
         &self,
         calendar_id: &str,
@@ -257,7 +243,6 @@ impl Db {
         Ok((saved, created))
     }
 
-    /// Change only the fields present. `Err("not found")` if there is no such note.
     pub fn patch_note(
         &self,
         calendar_id: &str,
@@ -305,10 +290,6 @@ impl Db {
     }
 }
 
-// ---- input --------------------------------------------------------------------
-
-/// Parse a note body. A full body (`partial` false) needs a `title`; a patch
-/// needs at least one field. Wrong types are errors, never silently dropped.
 pub fn parse_note_fields(body: &Value, partial: bool) -> Result<NoteFields, String> {
     let obj = body.as_object().ok_or("body must be an object")?;
     let mut fields = NoteFields::default();
@@ -367,8 +348,6 @@ pub fn parse_note_fields(body: &Value, partial: bool) -> Result<NoteFields, Stri
     Ok(fields)
 }
 
-/// `with_body` false leaves the text out: a list of long notes would otherwise
-/// be megabytes.
 pub fn json_note(row: &NoteRow, with_body: bool) -> Value {
     let mut value = json_note_fields(row, with_body);
     if let Value::Object(map) = &mut value {
@@ -404,9 +383,6 @@ fn json_note_fields(row: &NoteRow, with_body: bool) -> Value {
     Value::object(&pairs)
 }
 
-// ---- routes -------------------------------------------------------------------
-
-/// `/v1/c/{id}/notes` (no uid) and `/v1/c/{id}/notes/{uid}`. `/v1/notes` is `home`.
 pub(crate) fn route(
     state: &AppState,
     req: &Request,
@@ -462,9 +438,7 @@ fn get(state: &AppState, cal: &CalendarRow, uid: &str) -> Response {
     }
 }
 
-/// POST (no uid in the path) and PUT (uid from the path).
 fn write(state: &AppState, req: &Request, cal: &CalendarRow, path_uid: Option<&str>) -> Response {
-    // Parse before taking the lock: a slow body must not stall other requests.
     let body = match parse_body(req) {
         Ok(v) => v,
         Err(e) => return json_err(400, &e),
