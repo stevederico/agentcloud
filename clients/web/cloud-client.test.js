@@ -187,3 +187,35 @@ test("unsent seals from before a key rotation open with the kept previous key", 
   assert.deepEqual(later.unreadable.map((row) => row.uid), ["a", "c"])
   await assert.rejects(openWithAny([null, now.sealKey], "cal_r", "todo", "a", rows[0].seal), /rejected/)
 })
+
+test("seals match a known answer made with node:crypto, so the wire format and domain cannot drift", async () => {
+  const key = await sealKey("kat-write-key")
+  const wire = "alm1.AAECAwQFBgcICQoLHqS6DnBr7zW7hvj4CvvwB16mqB3vErRU53ok9fZ4VQ"
+  assert.equal(await openWith(key, "cal_kat", "note", "n1", wire), '{"title":"kat"}')
+  assert.equal(await authToken("kat-write-key"), "1bc612a4935a81c97f4e4d873ca075d392a3b6281b2302a2f7b59f4773a14d5d")
+})
+
+test("sync moves its cursor only after the handler took the batch", async () => {
+  const asked = []
+  const client = {
+    async changes(since) {
+      asked.push(since)
+      return { rev: since + 1, full: false, events: [{ uid: "e" }], todos: [], notes: [], deleted: [] }
+    },
+  }
+  let fail = true
+  const errors = []
+  const sync = createSync(client, {
+    onChange: () => {
+      if (fail) throw new Error("handler failed")
+    },
+    onError: (e) => errors.push(e.message),
+  })
+  await sync.now()
+  assert.equal(sync.cursor, 0)
+  assert.deepEqual(errors, ["handler failed"])
+  fail = false
+  await sync.now()
+  assert.deepEqual(asked, [0, 0], "the failed batch is asked for again")
+  assert.equal(sync.cursor, 1)
+})

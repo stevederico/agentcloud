@@ -15,10 +15,18 @@ check() { if [[ $2 == "$3" ]]; then echo "ok - $1"; else echo "not ok - $1: got 
 curl -s -H 'content-type: application/json' -H 'accept: application/json' -d '{"feed":"seal"}' "http://127.0.0.1:$port/calendars" >"$work/cal.json"
 python3 -c 'import json,sys; c=json.load(open(sys.argv[1])); json.dump([{"id":c["id"],"key":c["key"],"write":c["write"]}], open(sys.argv[2],"w"))' "$work/cal.json" "$work/creds.json"
 chmod 600 "$work/creds.json"
+python3 -c 'import json,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("UPDATE calendars SET auth_hash = \x27\x27 WHERE id = ?", (json.load(open(sys.argv[2]))["id"],)); c.commit()' "$work/c.db" "$work/cal.json"
+
+real_curl=$(command -v curl)
+mkdir -p "$work/shim"
+printf 'printf "%%s\\n" "$*" >>"%s"\nexec "%s" "$@"\n' "$work/argv.log" "$real_curl" >"$work/shim/curl"
+chmod +x "$work/shim/curl"
+printf 'echo almanac-auth-v1 >/dev/null\nexit 1\n' >"$work/failing-bin"
+chmod +x "$work/failing-bin"
 
 (
   trap - EXIT
-  export AGENTCLOUD_CONFIG="$work/creds.json" AGENTCLOUD_BIN="$BIN"
+  export AGENTCLOUD_CONFIG="$work/creds.json" AGENTCLOUD_BIN="$BIN" PATH="$work/shim:$PATH"
   # shellcheck source=cloud-lib.sh
   . "$here/cloud-lib.sh"
   cloud_load || { echo "not ok - load"; exit 1; }
@@ -40,6 +48,13 @@ chmod 600 "$work/creds.json"
   check "changes list opens" "$(cloud_curl GET "$CLOUD_ROOT/changes?since=0" "$out")" "200"
   check "changes notes" "$(cloud_open note <"$out" | python3 -c 'import json,sys; print([n["title"] for n in json.load(sys.stdin)["notes"]])')" "['Secret']"
   check "error text" "$(cloud_curl GET "$CLOUD_ROOT/notes/nope" "$out"; echo " $(cloud_error "$out")")" "404 not found"
+  bad=$(cloud_tmp)
+  check "a failed seal fails" "$(AGENTCLOUD_BIN="$work/failing-bin" cloud_seal_body note n2 "$plain" "$bad"; echo $?)" "1"
+  check "a failed seal writes no empty seal" "$(cat "$bad")" ""
+  check "curl ran through the argv log" "$(($(wc -l <"$work/argv.log") > 3))" "1"
+  check "the key never reaches curl's argv" "$(grep -cF "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[0]["key"])' "$CLOUD_CONFIG")" "$work/argv.log")" "0"
+  check "the token never reaches curl's argv" "$(grep -cF "$CLOUD_TOKEN" "$work/argv.log")" "0"
+  check "no shell variable holds the key" "$(set | grep -cF "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[0]["key"])' "$CLOUD_CONFIG")")" "0"
   echo "$CLOUD_TMPDIR" >"$work/tmpdir"
   exit $fails
 )

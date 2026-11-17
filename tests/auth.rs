@@ -113,3 +113,80 @@ fn sealed_files_round_trip_and_bind_to_the_calendar() {
 fn text_of(v: &agentcloud::json::Value, key: &str) -> String {
     text(v, key).to_string()
 }
+
+fn cli(args: &[&str], envs: &[(&str, &std::path::Path)], home: &std::path::Path, stdin: &[u8]) -> std::process::Output {
+    use std::io::Write;
+    let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_agentcloud"));
+    cmd.args(args)
+        .env_remove("AGENTCLOUD_CREDS")
+        .env_remove("ALMANAC_CREDS")
+        .env("HOME", home)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    for (k, v) in envs {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().unwrap();
+    child.stdin.take().unwrap().write_all(stdin).unwrap();
+    child.wait_with_output().unwrap()
+}
+
+fn scratch(name: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("agentcloud-{name}-{}", agentcloud::util::hex_encode(&agentcloud::util::random_bytes(6))));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+#[test]
+fn creds_are_found_by_new_env_then_old_env_then_new_dir_then_old_dir() {
+    let dir = scratch("creds");
+    let home = dir.join("home");
+    let new_dir = home.join(".config/agentcloud");
+    let old_dir = home.join(".config/almanac");
+    std::fs::create_dir_all(&new_dir).unwrap();
+    std::fs::create_dir_all(&old_dir).unwrap();
+    let write = |path: &std::path::Path, key: &str| {
+        std::fs::write(path, format!(r#"[{{"id":"cal_c","key":"{key}"}}]"#)).unwrap();
+    };
+    let (new_env, old_env) = (dir.join("new.json"), dir.join("old.json"));
+    write(&new_env, "from-agentcloud-env");
+    write(&old_env, "from-almanac-env");
+    write(&new_dir.join("hosted-calendars.json"), "from-agentcloud-dir");
+    write(&old_dir.join("hosted-calendars.json"), "from-almanac-dir");
+    let token = |envs: &[(&str, &std::path::Path)]| {
+        let out = cli(&["auth-token"], envs, &home, b"");
+        assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+        String::from_utf8(out.stdout).unwrap().trim().to_string()
+    };
+    let both = [("AGENTCLOUD_CREDS", new_env.as_path()), ("ALMANAC_CREDS", old_env.as_path())];
+    assert_eq!(token(&both), auth_token("from-agentcloud-env"));
+    assert_eq!(token(&both[1..]), auth_token("from-almanac-env"));
+    assert_eq!(token(&[]), auth_token("from-agentcloud-dir"));
+    std::fs::remove_file(new_dir.join("hosted-calendars.json")).unwrap();
+    assert_eq!(token(&[]), auth_token("from-almanac-dir"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn previous_keys_still_open_old_seals_and_old_files() {
+    let dir = scratch("prev");
+    let creds = dir.join("creds.json");
+    std::fs::write(
+        &creds,
+        r#"[{"id":"cal_p","key":"new-key","previousKeys":["string-old",{"key":"object-old"}]}]"#,
+    )
+    .unwrap();
+    let envs = [("AGENTCLOUD_CREDS", creds.as_path())];
+    let wire = agentcloud::seal::seal("string-old", "cal_p", "note", "n1", br#"{"title":"old"}"#).unwrap();
+    let out = cli(&["open", "--kind", "note", "--uid", "n1"], &envs, &dir, wire.as_bytes());
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), r#"{"title":"old"}"#);
+    let file = seal_file("object-old", "cal_p", b"old backup").unwrap();
+    let out = cli(&["open-file"], &envs, &dir, &file);
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    assert_eq!(out.stdout, b"old backup");
+    let stranger = seal_file("never-a-key", "cal_p", b"x").unwrap();
+    assert!(!cli(&["open-file"], &envs, &dir, &stranger).status.success());
+    std::fs::remove_dir_all(&dir).unwrap();
+}

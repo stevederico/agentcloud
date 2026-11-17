@@ -730,6 +730,7 @@ mod tests {
 
     #[test]
     fn tags_survive_the_round_trip_through_storage() {
+        assert_eq!(pack_tags(&["a".into(), "ab".into()]), ",a,ab,", "each tag needs a delimiter on both sides");
         assert_eq!(unpack_tags(&pack_tags(&["a".into(), "b-c".into()])), vec!["a", "b-c"]);
         assert_eq!(pack_tags(&[]), "");
         assert!(unpack_tags("").is_empty());

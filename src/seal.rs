@@ -541,6 +541,32 @@ mod tests {
     }
 
     #[test]
+    fn the_wire_format_and_domain_strings_match_a_known_answer_made_outside_this_code() {
+        let key = "kat-write-key";
+        assert_eq!(
+            auth_token(key),
+            "1bc612a4935a81c97f4e4d873ca075d392a3b6281b2302a2f7b59f4773a14d5d"
+        );
+        let wire = "alm1.AAECAwQFBgcICQoLHqS6DnBr7zW7hvj4CvvwB16mqB3vErRU53ok9fZ4VQ";
+        assert_eq!(open(key, "cal_kat", "note", "n1", wire).unwrap(), br#"{"title":"kat"}"#);
+        let packed = "000102030405060708090a0b0ee7ba47626ee6721bb3ad4c05bfffb0a9695fe45f991bf5";
+        let mut file = b"ALMF1\n".to_vec();
+        file.extend((0..packed.len()).step_by(2).map(|i| u8::from_str_radix(&packed[i..i + 2], 16).unwrap()));
+        assert_eq!(open_file(key, "cal_kat", &file).unwrap(), b"kat file");
+    }
+
+    #[test]
+    fn a_sealed_body_always_fits_the_64kb_request_cap() {
+        assert!(MAX_WIRE + r#"{"seal":""}"#.len() <= 64 * 1024);
+        for size in [1, 40_000, 44_000, 45_000, 46_000, 48 * 1024, 48 * 1024 + 1] {
+            if let Ok(wire) = seal("k", "c", "note", "n", &vec![b'x'; size]) {
+                assert!(wire.len() <= MAX_WIRE, "{size} sealed to {}", wire.len());
+            }
+        }
+        assert!(seal("k", "c", "note", "n", &vec![b'x'; 40_000]).is_ok());
+    }
+
+    #[test]
     fn a_sealed_calendar_rejects_a_field_write() {
         let body = crate::json::parse(r#"{"summary":"Dentist","start":"2026-08-18"}"#).unwrap();
         assert_eq!(classify(&body, "seal").unwrap_err(), "calendar is sealed");

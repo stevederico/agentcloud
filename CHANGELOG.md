@@ -1,3 +1,10 @@
+0.45.0
+
+  Pin seal format
+  Test auth ordering
+  Test transaction safety
+  Test client secrets
+
 0.44.0
 
   Remove code comments

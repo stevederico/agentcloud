@@ -8,7 +8,7 @@ use crate::time::now_iso;
 const PREFIX: &str = "almanac-";
 const SUFFIX: &str = ".db";
 
-const FIRST_DELAY: Duration = Duration::from_secs(30);
+const WAIT_AFTER_BOOT: Duration = Duration::from_secs(30);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackupConfig {
@@ -77,7 +77,7 @@ pub fn spawn(db_path: PathBuf, cfg: BackupConfig, key: Option<String>) {
         return;
     }
     thread::spawn(move || {
-        thread::sleep(FIRST_DELAY);
+        thread::sleep(WAIT_AFTER_BOOT);
         loop {
             match run_once(&db_path, &cfg.dir, cfg.keep, key.as_deref()) {
                 Ok(path) => println!(
@@ -138,6 +138,21 @@ mod tests {
         for new in &made[2..] {
             assert!(new.exists(), "{new:?} should have been kept");
         }
+    }
+
+    #[test]
+    fn copies_made_before_the_rename_are_still_found_and_pruned() {
+        let dir = scratch();
+        let db_path = dir.join("calendar.db");
+        let _db = Db::open(&db_path).unwrap();
+        let backups = dir.join("backups");
+        std::fs::create_dir_all(&backups).unwrap();
+        let old = backups.join("almanac-20200101T000000000Z.db");
+        std::fs::write(&old, b"").unwrap();
+        let new = run_once(&db_path, &backups, 1, None).unwrap();
+        assert!(!old.exists(), "an old almanac- copy was not pruned");
+        let name = new.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("almanac-"), "{name}");
     }
 
     #[test]

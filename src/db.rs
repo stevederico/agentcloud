@@ -2021,6 +2021,103 @@ mod tests {
     }
 
     #[test]
+    fn begin_takes_the_write_lock_up_front() {
+        let path = scratch_path();
+        let db = Db::open(&path).unwrap();
+        let other = Connection::open(&path).unwrap();
+        let tx = db.conn.begin().unwrap();
+        assert!(other.execute_batch("BEGIN IMMEDIATE").is_err(), "a second writer got in");
+        drop(tx);
+        other.execute_batch("BEGIN IMMEDIATE; COMMIT;").unwrap();
+    }
+
+    #[test]
+    fn a_failed_commit_is_rolled_back_when_the_guard_drops() {
+        let path = scratch_path();
+        let db = Db::open(&path).unwrap();
+        let (cal, _) = db.create_calendar(Some("Kept"), None, None, None, "plain").unwrap();
+        db.conn.execute_batch("PRAGMA busy_timeout = 0;").unwrap();
+        let reader = Connection::open(&path).unwrap();
+        reader.execute_batch("BEGIN; SELECT COUNT(*) FROM calendars;").unwrap();
+        {
+            let tx = db.conn.begin().unwrap();
+            db.conn
+                .execute("DELETE FROM calendars WHERE id = ?1", &[Bind::Text(&cal.id)])
+                .unwrap();
+            assert!(tx.commit().is_err(), "the reader should block the commit");
+        }
+        reader.execute_batch("COMMIT").unwrap();
+        assert!(db.get_calendar(&cal.id).unwrap().is_some());
+        db.conn.begin().unwrap().commit().unwrap();
+    }
+
+    #[test]
+    fn opening_sets_a_busy_timeout_so_writers_wait_for_the_lock() {
+        let (db, _) = tmp_db();
+        let ms = db.conn.query_row("PRAGMA busy_timeout", &[], |r| r.i64(0)).unwrap();
+        assert_eq!(ms, Some(5000));
+    }
+
+    fn calendar_with_children(db: &Db, cal_id: &str) {
+        series(db, cal_id);
+        db.put_exdate(cal_id, "standup", "2026-10-06T09:00:00").unwrap();
+        put_secret(db, cal_id);
+        db.upsert_note(
+            cal_id,
+            Some("gone"),
+            &crate::notes::NoteFields {
+                uid: None,
+                title: Some("Gone".into()),
+                body: Some("x".into()),
+                tags: None,
+                pinned: None,
+            },
+        )
+        .unwrap();
+        db.delete_note(cal_id, "gone").unwrap();
+    }
+
+    #[test]
+    fn deleting_a_calendar_removes_every_child_row_before_the_calendar_row() {
+        let (db, cal_id) = tmp_db();
+        calendar_with_children(&db, &cal_id);
+        let children = [
+            "event_exceptions", "events", "todos", "notes", "feeds",
+            "trash_events", "trash_todos", "trash_notes", "trash_event_exceptions",
+        ];
+        let left = children
+            .iter()
+            .map(|t| format!("EXISTS (SELECT 1 FROM {t} WHERE calendar_id = OLD.id)"))
+            .collect::<Vec<_>>()
+            .join(" OR ");
+        db.conn
+            .execute_batch(&format!(
+                "CREATE TRIGGER orphan_guard BEFORE DELETE ON calendars WHEN {left}
+                 BEGIN SELECT RAISE(ABORT, 'children left behind'); END;"
+            ))
+            .unwrap();
+        assert_eq!(db.delete_calendar(&cal_id), Ok(true));
+        assert!(db.get_calendar(&cal_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_calendar_delete_that_fails_at_the_last_step_keeps_everything() {
+        let (db, cal_id) = tmp_db();
+        calendar_with_children(&db, &cal_id);
+        db.conn
+            .execute_batch(
+                "CREATE TRIGGER boom BEFORE DELETE ON calendars
+                 BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+            )
+            .unwrap();
+        assert!(db.delete_calendar(&cal_id).is_err());
+        let ev = db.get_event(&cal_id, "standup").unwrap().unwrap();
+        assert_eq!(ev.exdates, vec!["2026-10-06T09:00:00".to_string()]);
+        assert_eq!(db.get_note(&cal_id, "n").unwrap().unwrap().body, NOTE_BODY);
+        db.conn.begin().unwrap().commit().unwrap();
+    }
+
+    #[test]
     fn a_failed_override_write_keeps_the_one_it_replaced() {
         let (db, cal_id) = tmp_db();
         series(&db, &cal_id);
@@ -2208,6 +2305,60 @@ mod tests {
     }
 
     #[test]
+    fn a_snapshot_is_taken_once_and_never_overwritten() {
+        let path = scratch_path();
+        let first = Db::open(&path).unwrap();
+        first.create_calendar(Some("Before"), None, None, None, "plain").unwrap();
+        snapshot(&path, "test").unwrap();
+        first.create_calendar(Some("After"), None, None, None, "plain").unwrap();
+        snapshot(&path, "test").unwrap();
+        let mut snap = path.as_os_str().to_owned();
+        snap.push(".pre-test");
+        let snap = Connection::open(std::path::Path::new(&snap)).unwrap();
+        let names = snap.query("SELECT name FROM calendars", &[], |r| r.text(0)).unwrap();
+        assert_eq!(names, vec!["Before".to_string()]);
+    }
+
+    #[test]
+    fn a_column_added_later_is_carried_into_the_trash_after_reopening() {
+        let path = scratch_path();
+        let db = Db::open(&path).unwrap();
+        let (cal, _) = db.create_calendar(Some("Later"), None, None, None, "plain").unwrap();
+        put_secret(&db, &cal.id);
+        db.conn
+            .execute_batch("ALTER TABLE notes ADD COLUMN extra TEXT NOT NULL DEFAULT ''; UPDATE notes SET extra = 'kept';")
+            .unwrap();
+        drop(db);
+        let db = Db::open(&path).unwrap();
+        assert!(db.delete_note(&cal.id, "n").unwrap());
+        let extra = db
+            .conn
+            .query_row("SELECT extra FROM trash_notes WHERE uid = 'n'", &[], |r| r.text(0))
+            .unwrap();
+        assert_eq!(extra.as_deref(), Some("kept"));
+    }
+
+    #[test]
+    fn a_new_event_under_a_deleted_uid_clears_the_old_trashed_exceptions() {
+        let (db, cal_id) = tmp_db();
+        series(&db, &cal_id);
+        db.put_exdate(&cal_id, "standup", "2026-10-06T09:00:00").unwrap();
+        assert!(db.delete_event(&cal_id, "standup").unwrap());
+        let trashed = |db: &Db| {
+            db.conn
+                .query_row(
+                    "SELECT COUNT(*) FROM trash_event_exceptions WHERE calendar_id = ?1 AND uid = 'standup'",
+                    &[Bind::Text(&cal_id)],
+                    |r| r.i64(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(trashed(&db), Some(1));
+        series(&db, &cal_id);
+        assert_eq!(trashed(&db), Some(0), "the new event would inherit them on a later restore");
+    }
+
+    #[test]
     fn a_fresh_database_needs_no_snapshot() {
         let path = scratch_path();
         Db::open(&path).unwrap();
@@ -2360,7 +2511,10 @@ mod tests {
 
         let before = std::fs::read(&path).unwrap();
         assert!(Db::open(&path).is_err());
-        assert!(Db::open_with(&path, Some("other-key")).is_err());
+        assert_eq!(
+            Db::open_with(&path, Some("other-key")).err().as_deref(),
+            Some("database key was rejected")
+        );
         assert_eq!(std::fs::read(&path).unwrap(), before);
     }
 

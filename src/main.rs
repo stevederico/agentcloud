@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use agentcloud::backup::{spawn as spawn_backups, BackupConfig};
 use agentcloud::db::Db;
 use agentcloud::env::{load_env_file, read_config_from_os};
-use agentcloud::http::{json_response, read_request_with, write_response, ReadError};
+use agentcloud::http::{json_response, read_request_with, write_response, ReadError, Request, Response};
 use agentcloud::json::{stringify, Value};
 use agentcloud::server::{handle, AppState};
 use agentcloud::time::now_iso;
@@ -206,26 +206,38 @@ impl Drop for ConnectionGuard {
     }
 }
 
+fn reserve_slot(live: &Arc<AtomicUsize>, max: usize) -> Option<ConnectionGuard> {
+    let taken = live.fetch_add(1, Ordering::SeqCst) + 1;
+    if taken > max {
+        live.fetch_sub(1, Ordering::SeqCst);
+        return None;
+    }
+    Some(ConnectionGuard(live.clone()))
+}
+
 fn accept_loop(listener: TcpListener, state: AppState) {
     let live = Arc::new(AtomicUsize::new(0));
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
 
-        let taken = live.fetch_add(1, Ordering::SeqCst) + 1;
-        if taken > MAX_CONNECTIONS {
-            live.fetch_sub(1, Ordering::SeqCst);
+        let Some(guard) = reserve_slot(&live, MAX_CONNECTIONS) else {
             eprintln!("agentcloud: refusing connection, {MAX_CONNECTIONS} already in flight");
             drop(stream);
             continue;
-        }
-
-        let guard = ConnectionGuard(live.clone());
+        };
         let state = state.clone();
         thread::spawn(move || {
             let _guard = guard;
             serve(stream, &state);
         });
     }
+}
+
+fn answer_or_500(req: &Request, handler: impl FnOnce() -> Response) -> Response {
+    catch_unwind(AssertUnwindSafe(handler)).unwrap_or_else(|_| {
+        eprintln!("agentcloud: handler panicked: {} {}", req.method, req.path);
+        json_response(500, r#"{"error":"internal error"}"#)
+    })
 }
 
 fn serve(stream: TcpStream, state: &AppState) {
@@ -253,10 +265,7 @@ fn serve(stream: TcpStream, state: &AppState) {
     let res = match read_request_with(&mut reader, &mut go_ahead) {
         Ok(mut req) => {
             req.peer = peer;
-            catch_unwind(AssertUnwindSafe(|| handle(state, &req))).unwrap_or_else(|_| {
-                eprintln!("agentcloud: handler panicked: {} {}", req.method, req.path);
-                json_response(500, r#"{"error":"internal error"}"#)
-            })
+            answer_or_500(&req, || handle(state, &req))
         }
         Err(ReadError::Reject(status, msg)) => {
             eprintln!("agentcloud: rejecting request from {peer}: {status} {msg}");
@@ -284,5 +293,44 @@ fn parse_bind(host: &str, port: u16) -> Option<SocketAddr> {
         format!("[{host}]:{port}").parse().ok()
     } else {
         format!("{host}:{port}").parse().ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_names_listen_on_v4_and_v6() {
+        for host in ["localhost", "127.0.0.1", "::1"] {
+            assert_eq!(listen_hosts(host), vec!["127.0.0.1".to_string(), "::1".to_string()], "{host}");
+        }
+        assert_eq!(listen_hosts("0.0.0.0"), vec!["0.0.0.0".to_string()]);
+        assert_eq!(parse_bind("::1", 8080), "[::1]:8080".parse().ok());
+    }
+
+    #[test]
+    fn a_slot_is_reserved_before_work_and_released_even_when_the_worker_panics() {
+        let live = Arc::new(AtomicUsize::new(0));
+        let first = reserve_slot(&live, 2).unwrap();
+        let second = reserve_slot(&live, 2).unwrap();
+        assert!(reserve_slot(&live, 2).is_none());
+        assert_eq!(live.load(Ordering::SeqCst), 2, "a refused connection kept its slot");
+        let _ = std::thread::spawn(move || {
+            let _guard = second;
+            panic!("worker panicked");
+        })
+        .join();
+        assert_eq!(live.load(Ordering::SeqCst), 1);
+        assert!(reserve_slot(&live, 2).is_some());
+        drop(first);
+        assert_eq!(live.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_handler_panic_becomes_a_response_not_a_dropped_socket() {
+        let req = Request::new("GET", "/boom");
+        assert_eq!(answer_or_500(&req, || panic!("handler bug")).status, 500);
+        assert_eq!(answer_or_500(&req, || json_response(201, "{}")).status, 201);
     }
 }

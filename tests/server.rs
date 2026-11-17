@@ -837,6 +837,20 @@ fn caps_calendar_creation_globally_and_in_total() {
 }
 
 #[test]
+fn one_client_over_its_own_limit_cannot_spend_the_global_create_budget() {
+    let mut app = test_app();
+    app.limits.creates_per_client_hour = 1;
+    app.limits.creates_global_hour = 3;
+    assert_eq!(create(&app, Some("1.1.1.1")).0, 201);
+    for _ in 0..10 {
+        assert_eq!(create(&app, Some("1.1.1.1")).0, 429);
+    }
+    assert_eq!(create(&app, Some("2.2.2.2")).0, 201);
+    assert_eq!(create(&app, Some("3.3.3.3")).0, 201);
+    assert_eq!(create(&app, Some("4.4.4.4")).0, 429);
+}
+
+#[test]
 fn caps_events_per_calendar_but_not_home() {
     let mut app = test_app();
     app.limits.max_events = 3;

@@ -179,6 +179,40 @@ fn if_match_needs_auth_and_no_header_is_last_write_wins() {
 }
 
 #[test]
+fn a_stranger_cannot_probe_uids_or_read_items_through_if_match() {
+    let app = app();
+    let cal = create(&app);
+    put_note(&app, &cal, "n", "Secret", None);
+    put_note(&app, &cal, "n", "Secret again", None);
+    for uid in ["n", "missing"] {
+        for rev in ["\"1\"", "\"999\"", "*"] {
+            for method in ["PUT", "DELETE"] {
+                let req = Request::new(method, &format!("/v1/c/{}/notes/{uid}", cal.id))
+                    .with_header("authorization", "Bearer wrong")
+                    .with_header("if-match", rev)
+                    .with_header("content-type", "application/json")
+                    .with_body(br#"{"title":"x"}"#.to_vec());
+                let (status, body, _) = send(&app, req);
+                assert_eq!(status, 401, "{method} {uid} {rev}: {body}");
+                assert!(!body.contains("Secret"), "{body}");
+            }
+        }
+    }
+}
+
+#[test]
+fn every_write_counts_exactly_once() {
+    let app = app();
+    let cal = create(&app);
+    let (_, a) = put_note(&app, &cal, "n1", "One", None);
+    let (_, b) = put_note(&app, &cal, "n2", "Two", None);
+    let (_, c) = put_note(&app, &cal, "n1", "One again", None);
+    assert_eq!((rev_of(&b), rev_of(&c)), (rev_of(&a) + 1, rev_of(&a) + 2));
+    let (_, all) = call(&app, &cal.key, "GET", &format!("/v1/c/{}/changes", cal.id), None);
+    assert_eq!(rev_of(&all), rev_of(&c));
+}
+
+#[test]
 fn a_bad_cursor_is_400() {
     let app = app();
     let cal = create(&app);

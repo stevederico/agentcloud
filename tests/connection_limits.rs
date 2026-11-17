@@ -267,6 +267,8 @@ fn scrub_legacy_keys_blanks_plaintext_on_boot_and_keeps_keys_working() {
             .len()
     };
     assert!(plaintext(&db) > 0, "the first boot leaves a throwaway in the legacy column");
+    drop(start_server_with(&db, &[("AGENT_KEY", "home-key"), ("FEED_TOKEN", "home-feed")]));
+    assert!(plaintext(&db) > 0, "a boot without SCRUB_LEGACY_KEYS scrubbed anyway");
 
     let (_second, port) = start_server_with(
         &db,
